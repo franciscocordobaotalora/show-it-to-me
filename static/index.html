@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Show It To Me – Pi 5</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+<h1>Show It To Me</h1>
+<p class="status" id="status" role="status" aria-live="polite">Ready</p>
+</header>
+<main>
+<div class="camera-wrap">
+<video id="video" autoplay playsinline muted></video>
+<canvas id="overlay"></canvas>
+<img id="preview" alt="Preview" hidden />
+<input type="file" id="file" accept="image/*" hidden />
+<button id="capture">Capture</button>
+<button id="retake" hidden>Retake</button>
+<button id="upload">Upload image</button>
+</div>
+<div class="controls">
+<label for="question" class="visually-hidden">Question</label>
+<input id="question" placeholder="Ask about the board…" aria-label="Question" />
+<button id="ask" aria-label="Ask">Ask</button>
+<label class="demo-toggle"><input type="checkbox" id="demoMode" /> Demo mode</label>
+<p class="note">Demo mode uses deterministic fixtures only. SAM unavailable. Model unavailable in UI.</p>
+</div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
