@@ -59,6 +59,7 @@ function orientationFrom(w,h){return w>=h?'landscape':'portrait';}
 function captureFromVideo(){
   const w = video.videoWidth, h = video.videoHeight;
   if(!w||!h){setStatus('No video');return;}
+  uploadSeq++;
   lastRegions = [];
   lastFrame = null;
   const img = new Image();
@@ -198,6 +199,7 @@ async function ask(){
 
 captureBtn.onclick = captureFromVideo;
 retakeBtn.onclick = ()=>{
+  uploadSeq++;
   currentFrame=null;
   pendingFrameId = null;
   pendingRequestId = null;

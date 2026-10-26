@@ -146,8 +146,7 @@ test.describe('Show It To Me T01', () => {
     const buf = Buffer.from('not an image');
     await page.setInputFiles('#file', { name: 'test.txt', mimeType: 'text/plain', buffer: buf });
     await page.waitForTimeout(200);
-    const status = await page.locator('#status').textContent();
-    expect(status).toContainText('Unsupported');
+    await expect(page.locator('#status')).toContainText('Unsupported');
   });
 
   test('upload validation: empty question', async ({ page }) => {
@@ -155,15 +154,43 @@ test.describe('Show It To Me T01', () => {
     await page.setInputFiles('#file', TEST_IMAGE);
     await page.locator('#demoMode').check();
     await page.locator('#ask').click();
-    const status = await page.locator('#status').textContent();
-    expect(status).toContainText('Enter a question');
+    await expect(page.locator('#status')).toContainText('Enter a question');
   });
 
   test('camera unavailable fallback to upload', async ({ page }) => {
     await page.goto(BASE);
-    const status = await page.locator('#status').textContent();
-    expect(status).toMatch(/Camera unavailable|Ready/);
+    await expect(page.locator('#status')).toMatch(/Camera unavailable|Ready/);
     await page.setInputFiles('#file', TEST_IMAGE);
     await expect(page.locator('#preview')).toBeVisible();
+  });
+
+  test('corrupt image shows error state', async ({ page }) => {
+    await page.goto(BASE);
+    const buf = Buffer.from('corrupt');
+    await page.setInputFiles('#file', { name: 'bad.png', mimeType: 'image/png', buffer: buf });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#status')).toContainText('Corrupt image');
+  });
+
+  test('oversized upload rejected', async ({ page }) => {
+    await page.goto(BASE);
+    const big = Buffer.alloc(11 * 1024 * 1024, 0);
+    await page.setInputFiles('#file', { name: 'big.png', mimeType: 'image/png', buffer: big });
+    await page.waitForTimeout(200);
+    await expect(page.locator('#status')).toContainText('Image too large');
+  });
+
+  test('pending upload retake race prevents late preview', async ({ page }) => {
+    await page.goto(BASE);
+    await page.setInputFiles('#file', TEST_IMAGE);
+    // Simulate slow onload by overriding Image prototype temporarily
+    await page.evaluate(() => {
+      const orig = HTMLImageElement.prototype.onload;
+      HTMLImageElement.prototype.onload = function() { setTimeout(() => orig?.call(this), 500); };
+    });
+    await page.setInputFiles('#file', TEST_IMAGE);
+    await page.locator('#retake').click();
+    await page.waitForTimeout(800);
+    await expect(page.locator('#preview')).toBeHidden();
   });
 });
