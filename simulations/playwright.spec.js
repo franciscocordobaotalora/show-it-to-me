@@ -139,4 +139,31 @@ test.describe('Show It To Me T01', () => {
     });
     expect(boundsMatch).toBeTruthy();
   });
+
+  // T02 simulations
+  test('upload validation: non-image file', async ({ page }) => {
+    await page.goto(BASE);
+    const buf = Buffer.from('not an image');
+    await page.setInputFiles('#file', { name: 'test.txt', mimeType: 'text/plain', buffer: buf });
+    await page.waitForTimeout(200);
+    const status = await page.locator('#status').textContent();
+    expect(status).toContainText('Unsupported');
+  });
+
+  test('upload validation: empty question', async ({ page }) => {
+    await page.goto(BASE);
+    await page.setInputFiles('#file', TEST_IMAGE);
+    await page.locator('#demoMode').check();
+    await page.locator('#ask').click();
+    const status = await page.locator('#status').textContent();
+    expect(status).toContainText('Enter a question');
+  });
+
+  test('camera unavailable fallback to upload', async ({ page }) => {
+    await page.goto(BASE);
+    const status = await page.locator('#status').textContent();
+    expect(status).toMatch(/Camera unavailable|Ready/);
+    await page.setInputFiles('#file', TEST_IMAGE);
+    await expect(page.locator('#preview')).toBeVisible();
+  });
 });

@@ -13,6 +13,7 @@
 ## Request
 {
   "frameId": string,
+  "requestId": string,
   "question": string,
   "selectedRegion": null | { "nx": float 0-1, "ny": float 0-1 }
 }
@@ -20,6 +21,7 @@
 ## Response
 {
   "frameId": string,
+  "requestId": string,
   "status": "ok|uncertain|view_needed|unavailable",
   "regions": [
     {

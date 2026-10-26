@@ -16,6 +16,7 @@ let pendingFrameId = null;
 let pendingRequestId = null;
 let lastRegions = [];
 let lastFrame = null;
+let uploadSeq = 0;
 
 function setStatus(s){statusEl.textContent=s; statusEl.setAttribute('aria-live','polite');}
 
@@ -58,6 +59,8 @@ function orientationFrom(w,h){return w>=h?'landscape':'portrait';}
 function captureFromVideo(){
   const w = video.videoWidth, h = video.videoHeight;
   if(!w||!h){setStatus('No video');return;}
+  lastRegions = [];
+  lastFrame = null;
   const img = new Image();
   const tmp = document.createElement('canvas');
   tmp.width=w; tmp.height=h;
@@ -85,8 +88,10 @@ function captureFromFile(file){
   if(currentObjectUrl){ URL.revokeObjectURL(currentObjectUrl); }
   const url = URL.createObjectURL(file);
   currentObjectUrl = url;
+  const mySeq = ++uploadSeq;
   const img = new Image();
   img.onload = ()=>{
+    if(mySeq !== uploadSeq){ URL.revokeObjectURL(url); return; }
     preview.src = url;
     preview.hidden=false;
     video.hidden=true;
@@ -162,6 +167,11 @@ async function ask(){
   pendingRequestId = requestId;
   setStatus('Thinking…');
   const resp = await mockResponse(frameId, q, requestId);
+  // validate response shape
+  if(!resp || !resp.frameId || !resp.requestId){
+    setStatus('Invalid response');
+    return;
+  }
   // stale response protection: null frame, frame mismatch, or request mismatch
   if(!currentFrame || resp.frameId !== currentFrame.frameId || resp.frameId !== pendingFrameId || resp.requestId !== pendingRequestId){
     setStatus('Response discarded – new frame or request');
@@ -191,6 +201,8 @@ retakeBtn.onclick = ()=>{
   currentFrame=null;
   pendingFrameId = null;
   pendingRequestId = null;
+  lastRegions = [];
+  lastFrame = null;
   if(currentObjectUrl){ URL.revokeObjectURL(currentObjectUrl); currentObjectUrl=null; }
   preview.hidden=true;
   video.hidden=false;

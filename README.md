@@ -25,8 +25,11 @@ Intended runtime: BF16 Muse Glimmer 30B via authenticated vLLM server with tool 
 - BF16 Muse Glimmer 30B downloaded
 - Small text/vision smoke passed
 - Authenticated vLLM server and tool roundtrip tested
-- SAM3 environment imports present; gated weights await author approval
-- No product app yet, no real SAM mask yet
+- SAM3 environment imports present; SAM auth resolved, weights accessible
+- Phone-camera shell implemented with upload/retake/question flow, overlay renderer, frame/request contracts, stale-response protection
+- T01 public browser suite passes 8 tests; protected test URL https://show-it-to-me.experiment.franciscocordobaotalora.com/ (HTTP Basic auth)
+- T02 camera/input simulations in progress
+- No real Muse+SAM end-to-end yet
 
 Model provenance revision cec94fcfd6512f2cfe708138c32533b346ea4f69 and runtime vLLM0.30.0.
 
