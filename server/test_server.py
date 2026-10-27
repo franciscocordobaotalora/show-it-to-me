@@ -10,7 +10,7 @@ class FakeGlimmer:
         if self.raise_error:
             raise self.raise_error
         return self.response
-    def pass2(self, view, targets, question):
+    def pass2(self, *args, **kwargs):
         return 'explanation'
 
 class FakeSam:
@@ -102,7 +102,7 @@ class TestAnalyze(unittest.TestCase):
         class GlimmerWithExplanation:
             def pass1(self, d,q,r):
                 return {'view':'top','needs_view':None,'targets':[]}
-            def pass2(self, v,t,q):
+            def pass2(self, *args):
                 return 'The fan plugs into 4-pin socket ~[620, 250, 700, 340] Pi 5'
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
         status, body = analyze(data, GlimmerWithExplanation(), FakeSam())
@@ -138,6 +138,97 @@ class TestAnalyze(unittest.TestCase):
         self.assertIn('sam_ms', tm)
         self.assertIn('pass2_ms', tm)
         self.assertIn('total_ms', tm)
+
+    def test_provenance_timings_present(self):
+        data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
+        glimmer = FakeGlimmer({'view':'top','needs_view':None,'targets':[]})
+        status, body = analyze(data, glimmer, FakeSam())
+        prov = body['provenance']
+        self.assertIn('timings_ms', prov)
+        tm = prov['timings_ms']
+        self.assertIn('decode_ms', tm)
+        self.assertIn('pass1_ms', tm)
+        self.assertIn('sam_ms', tm)
+        self.assertIn('pass2_ms', tm)
+        self.assertIn('total_ms', tm)
+
+class TestGlimmerPayload(unittest.TestCase):
+    def test_pass1_sends_image_url_part(self):
+        import glimmer, urllib.request, json
+        captured = {}
+        class DummyResp:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self):
+                return json.dumps({'choices':[{'message':{'content':'{"view":"top","needs_view":null,"targets":[]}'}}]}).encode()
+        def fake_urlopen(req, timeout=120):
+            captured['body'] = req.data
+            captured['url'] = req.full_url
+            return DummyResp()
+        orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        try:
+            glimmer.MUSE_API_BASE = 'http://example.com'
+            glimmer.MUSE_API_KEY = 'k'
+            glimmer.pass1('data:image/jpeg;base64,AAA','q','ref')
+            payload = json.loads(captured['body'])
+            messages = payload['messages']
+            self.assertEqual(messages[1]['role'],'user')
+            content = messages[1]['content']
+            self.assertIsInstance(content, list)
+            self.assertEqual(content[0]['type'],'image_url')
+            self.assertEqual(content[0]['image_url']['url'],'data:image/jpeg;base64,AAA')
+            # text part should not contain base64
+            text = content[1]['text']
+            self.assertNotIn('base64', text)
+        finally:
+            urllib.request.urlopen = orig
+
+    def test_pass2_sends_image_url_part(self):
+        import glimmer, urllib.request, json
+        captured = {}
+        class DummyResp:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self):
+                return json.dumps({'choices':[{'message':{'content':'ok'}}]}).encode()
+        def fake_urlopen(req, timeout=120):
+            captured['body'] = req.data
+            return DummyResp()
+        orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        try:
+            glimmer.MUSE_API_BASE = 'http://example.com'
+            glimmer.MUSE_API_KEY = 'k'
+            glimmer.pass2('data:image/jpeg;base64,BBB','top',[],'q','ref')
+            payload = json.loads(captured['body'])
+            messages = payload['messages']
+            content = messages[1]['content']
+            self.assertIsInstance(content, list)
+            self.assertEqual(content[0]['type'],'image_url')
+            self.assertEqual(content[0]['image_url']['url'],'data:image/jpeg;base64,BBB')
+        finally:
+            urllib.request.urlopen = orig
+
+    def test_content_null_raises_truncated(self):
+        import glimmer, urllib.request, json
+        class DummyResp:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self):
+                return json.dumps({'choices':[{'message':{'content':None}}]}).encode()
+        def fake_urlopen(req, timeout=120):
+            return DummyResp()
+        orig = urllib.request.urlopen
+        urllib.request.urlopen = fake_urlopen
+        try:
+            glimmer.MUSE_API_BASE = 'http://example.com'
+            glimmer.MUSE_API_KEY = 'k'
+            with self.assertRaises(glimmer.GlimmerError) as cm:
+                glimmer.pass1('data:image/jpeg;base64,AAA','q','ref')
+            self.assertEqual(cm.exception.code,'glimmer_truncated')
+        finally:
+            urllib.request.urlopen = orig
 
 if __name__ == '__main__':
     unittest.main()

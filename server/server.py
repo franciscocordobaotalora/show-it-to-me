@@ -143,7 +143,7 @@ def analyze(data, glimmer_mod, sam_mod):
     # glimmer pass2
     t_pass2_start = time.time()
     try:
-        explanation = glimmer_mod.pass2(p1.get('view'), targets, question)
+        explanation = glimmer_mod.pass2(data_url, p1.get('view'), regions, question, ref_text)
         # strip bracketed coordinate lists only, preserve digits/spaces elsewhere
         explanation = re.sub(r'~?\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]', '', explanation)
         explanation = re.sub(r'\(\s*\d+\s*,\s*\d+\s*\)', '', explanation)

@@ -11,9 +11,12 @@ class SamSession:
     def __init__(self, image_pil):
         _load()
         self.w, self.h = image_pil.size
-        # set image once per session
+        # set image once per session inside inference/autocast
+        import torch
         with _lock:
-            self.state = _processor.set_image(image_pil)
+            with torch.inference_mode():
+                with torch.autocast('cuda', dtype=torch.bfloat16):
+                    self.state = _processor.set_image(image_pil)
 
     def segment(self, target):
         try:
@@ -128,29 +131,20 @@ def mask_to_polygon(mask_np, w, h):
         largest = max(contours, key=cv2.contourArea)
         perimeter = cv2.arcLength(largest, True)
         epsilon = 0.004 * perimeter if perimeter > 0 else 0
+        # increase epsilon until <=60 points
         approx = cv2.approxPolyDP(largest, epsilon, True)
+        while len(approx) > 60 and epsilon > 0:
+            epsilon *= 1.5
+            approx = cv2.approxPolyDP(largest, epsilon, True)
         pts = []
         for p in approx.reshape(-1, 2):
             x_norm = float(p[0]) / w
             y_norm = float(p[1]) / h
             pts.append([x_norm, y_norm])
-        if len(pts) > 60:
-            pts = pts[:60]
         return pts
     except Exception:
-        # Fallback pure-numpy bounding-box polygon when cv2 is unavailable
-        ys, xs = np.where(mask)
-        if xs.size == 0:
-            return []
-        x_min, x_max = xs.min(), xs.max()
-        y_min, y_max = ys.min(), ys.max()
-        pts = [
-            [float(x_min)/w, float(y_min)/h],
-            [float(x_max)/w, float(y_min)/h],
-            [float(x_max)/w, float(y_max)/h],
-            [float(x_min)/w, float(y_max)/h],
-        ]
-        return pts
+        # On failure return empty to mark region not_found
+        return []
 
 def _load():
     global _model, _processor

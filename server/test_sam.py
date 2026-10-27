@@ -44,6 +44,10 @@ class TestSamHelpers(unittest.TestCase):
         w, h = 100, 100
         mask = np.zeros((h,w), dtype=np.uint8)
         mask[20:80, 30:70] = 255
+        try:
+            import cv2
+        except Exception:
+            self.skipTest('cv2 not available')
         poly = mask_to_polygon(mask, w, h)
         self.assertTrue(len(poly) > 0)
         # polygon points should be within [0,1]
