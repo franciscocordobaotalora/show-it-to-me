@@ -65,7 +65,7 @@ def analyze(data, glimmer_mod, sam_mod):
     except Exception:
         return 400, {'error':'corrupt_image'}
     # reference text
-    from reference import get_reference_text, get_part_side, get_part_label
+    from reference import get_reference_text, get_part_side, get_part_label, get_part_visual
     ref_text = get_reference_text()
     ref_text = f"Image size: {img.width} x {img.height} pixels\n{ref_text}"
     timings = {}
@@ -96,10 +96,33 @@ def analyze(data, glimmer_mod, sam_mod):
         if view == 'top' or view is None:
             needs_view = 'flip_board'
             targets = [x for x in targets if x.get('part') != 'microsd_slot']
-    # refinement stub
+    # real refinement
+    def box_iou(a,b):
+        x1 = max(a[0],b[0]); y1 = max(a[1],b[1]); x2 = min(a[2],b[2]); y2 = min(a[3],b[3])
+        inter = max(0,x2-x1)*max(0,y2-y1)
+        area_a = max(0,a[2]-a[0])*max(0,a[3]-a[1])
+        area_b = max(0,b[2]-b[0])*max(0,b[3]-b[1])
+        union = area_a + area_b - inter
+        return inter/union if union else 0.0
     for t in targets:
         if t.get('box_1000'):
-            t['refined'] = True
+            part = t.get('part')
+            desc = get_part_visual(part)
+            refined_box = None
+            if desc and hasattr(glimmer_mod, 'refine_box'):
+                refined_box = glimmer_mod.refine_box(img, t['box_1000'], desc)
+                if refined_box:
+                    # validate
+                    orig = t['box_1000']
+                    rx1,ry1,rx2,ry2 = refined_box
+                    if rx2>rx1 and ry2>ry1:
+                        area_orig = max(0,orig[2]-orig[0])*max(0,orig[3]-orig[1])
+                        area_ref = max(0,rx2-rx1)*max(0,ry2-ry1)
+                        if area_orig>0 and area_ref<=4*area_orig and box_iou(orig,refined_box)>0.1:
+                            t['box_1000'] = refined_box
+                            t['refined'] = True
+                            continue
+            t['refined'] = False
     # SAM segmentation
     regions = []
     sam_status = None
@@ -176,6 +199,8 @@ def analyze(data, glimmer_mod, sam_mod):
         # strip bracketed coordinate lists only, preserve digits/spaces elsewhere
         explanation = re.sub(r'~?\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]', '', explanation)
         explanation = re.sub(r'\(\s*\d+\s*,\s*\d+\s*\)', '', explanation)
+        # strip raw part ids
+        explanation = re.sub(r'\b[a-z]+_[a-z_]+\b', '', explanation)
         explanation = re.sub(r'\s+', ' ', explanation).strip()
     except Exception:
         explanation = 'Explanation unavailable'

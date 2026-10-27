@@ -86,6 +86,67 @@ def pass1(image_data_url, question, reference_text):
     except Exception:
         raise GlimmerError('glimmer_unreachable')
 
+def refine_box(image_pil, box_1000, description, timeout=120):
+    import re
+    from PIL import Image
+    w,h = image_pil.size
+    x1,y1,x2,y2 = box_1000
+    # convert to pixel coords
+    x1p = int(x1/1000*w)
+    y1p = int(y1/1000*h)
+    x2p = int(x2/1000*w)
+    y2p = int(y2/1000*h)
+    bw = max(1, x2p - x1p)
+    bh = max(1, y2p - y1p)
+    pad = 1.0
+    cx1 = max(0, x1p - int(bw*pad))
+    cy1 = max(0, y1p - int(bh*pad))
+    cx2 = min(w, x2p + int(bw*pad))
+    cy2 = min(h, y2p + int(bh*pad))
+    cw = max(cx2-cx1, 200)
+    ch = max(cy2-cy1, 200)
+    cx2 = min(w, cx1 + cw)
+    cy2 = min(h, cy1 + ch)
+    crop = image_pil.crop((cx1,cy1,cx2,cy2))
+    crop = crop.resize((crop.width*3, crop.height*3))
+    # encode crop
+    import io, base64
+    buf = io.BytesIO()
+    crop.save(buf, format='JPEG', quality=90)
+    data_url = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+    prompt = f'This crop shows {description} somewhere near its centre. Reply ONLY with a TIGHT bounding box [x1,y1,x2,y2] of exactly that part, in 0..1000 coordinates of this crop.'
+    messages = [
+        {'role':'system','content':'Return ONLY a bounding box [x1,y1,x2,y2] in 0..1000 coordinates. No extra text.'},
+        {'role':'user','content':[
+            {'type':'image_url','image_url':{'url': data_url}},
+            {'type':'text','text': prompt}
+        ]}
+    ]
+    try:
+        resp = _post_chat(messages, timeout=timeout, max_tokens=600)
+        content = _extract_content(resp)
+        if not content:
+            return None
+        m = re.search(r'\[\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\]', content)
+        if not m:
+            return None
+        rx1,ry1,rx2,ry2 = map(float, m.groups())
+        # convert back to full frame 0..1000
+        crop_w = cx2 - cx1
+        crop_h = cy2 - cy1
+        fx1 = (cx1 + rx1/1000*crop_w)
+        fy1 = (cy1 + ry1/1000*crop_h)
+        fx2 = (cx1 + rx2/1000*crop_w)
+        fy2 = (cy1 + ry2/1000*crop_h)
+        # convert to 0..1000
+        fx1_1000 = fx1 / w * 1000
+        fy1_1000 = fy1 / h * 1000
+        fx2_1000 = fx2 / w * 1000
+        fy2_1000 = fy2 / h * 1000
+        return [fx1_1000, fy1_1000, fx2_1000, fy2_1000]
+    except Exception:
+        return None
+
 def pass2(image_data_url, view, regions, question, reference_text):
     system_prompt = 'Explain in 2 sentences using the found region labels. Never output coordinates or boxes.'
     # Build region labels list
