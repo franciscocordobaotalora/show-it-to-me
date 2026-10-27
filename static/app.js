@@ -154,15 +154,14 @@ function drawRegions(regions, frame){
   const w = canvas.width, h = canvas.height;
   if(!w || !h) return;
   const observed = [];
-  const notFound = [];
   regions.forEach(r=>{
     if(r.source !== 'sam3') return;
     if(r.status === 'observed'){
       observed.push(r);
-    }else if(r.status === 'not_found'){
-      notFound.push(r);
     }
   });
+  const lineWidthOuter = Math.max(3, w*0.003);
+  const lineWidthHalo = Math.max(1, w*0.0015);
   observed.forEach(r=>{
     const poly = r.polygon;
     if(!Array.isArray(poly) || poly.length < 3) return;
@@ -173,10 +172,15 @@ function drawRegions(regions, frame){
       if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
     });
     ctx.closePath();
-    ctx.fillStyle = 'rgba(0,255,255,0.18)';
+    ctx.fillStyle = 'rgba(255,98,0,0.35)';
     ctx.fill();
-    ctx.strokeStyle = '#0ff';
-    ctx.lineWidth = 2;
+    // white halo
+    ctx.lineWidth = lineWidthHalo + lineWidthOuter;
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.stroke();
+    // orange outline
+    ctx.lineWidth = lineWidthOuter;
+    ctx.strokeStyle = '#ff6200';
     ctx.stroke();
     // centroid
     let cx = 0, cy = 0;
@@ -187,19 +191,25 @@ function drawRegions(regions, frame){
     const pad = 6;
     ctx.font = '14px sans-serif';
     const metrics = ctx.measureText(label);
-    const lx = Math.max(0, Math.min(w - metrics.width - pad*2, cx - metrics.width/2 - pad));
-    const ly = Math.max(0, Math.min(h - 28, cy - 40));
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(lx, ly, metrics.width + pad*2, 20);
-    ctx.strokeStyle = '#0ff';
-    ctx.strokeRect(lx, ly, metrics.width + pad*2, 20);
-    ctx.fillStyle = '#0ff';
-    ctx.fillText(label, lx + pad, ly + 15);
+    let lx = cx - metrics.width/2 - pad;
+    let ly = cy - 40;
+    // keep chip inside image
+    lx = Math.max(pad, Math.min(w - metrics.width - pad*2 - pad, lx));
+    ly = Math.max(pad, Math.min(h - 28 - pad, ly));
+    // label chip
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(lx - pad, ly - pad, metrics.width + pad*2, 20 + pad*2);
+    ctx.strokeStyle = '#ff6200';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(lx - pad, ly - pad, metrics.width + pad*2, 20 + pad*2);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, lx, ly + 14);
     // arrow
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    ctx.lineTo(lx + metrics.width/2 + pad, ly + 10);
-    ctx.strokeStyle = '#0ff';
+    ctx.lineTo(lx + metrics.width/2, ly);
+    ctx.strokeStyle = '#ff6200';
+    ctx.lineWidth = Math.max(2, w*0.002);
     ctx.stroke();
   });
   // demo label
@@ -227,9 +237,10 @@ function renderAnswer(data){
     banner.textContent = msg;
     answerEl.appendChild(banner);
   }
-  // explanation
+  // explanation with id stripping
+  let explanation = (data.explanation || '').replace(/\([a-z_]+\)/gi, '').replace(/\b[a-z]+_[a-z_]+\b/gi, '').replace(/\s+/g, ' ').trim();
   const expl = document.createElement('div');
-  expl.textContent = data.explanation || '';
+  expl.textContent = explanation;
   answerEl.appendChild(expl);
   // sources
   if(Array.isArray(data.sources) && data.sources.length){
@@ -259,18 +270,32 @@ function renderAnswer(data){
     });
     answerEl.appendChild(nf);
   }
-  // provenance sam status
-  if(data.provenance && data.provenance.sam_model !== undefined){
-    const sam = document.createElement('div');
-    sam.style.fontSize = '0.8rem';
-    sam.style.opacity = '0.8';
-    sam.style.marginTop = '0.5rem';
-    sam.textContent = 'SAM: ' + String(data.provenance.sam_model);
-    answerEl.appendChild(sam);
+  // provenance sam status - honest
+  const prov = data.provenance || {};
+  const samModel = prov.sam_model;
+  const regions = data.regions || [];
+  const hasObserved = regions.some(r=> r.source==='sam3' && r.status==='observed');
+  const hasNotFound = regions.some(r=> r.source==='sam3' && r.status==='not_found');
+  let samText = '';
+  if(samModel === 'sam_unavailable' || samModel === 'sam_error'){
+    samText = 'SAM unavailable';
+  }else if(hasObserved){
+    samText = 'SAM3 mask';
+  }else if(hasNotFound){
+    samText = 'no mask found';
+  }else{
+    samText = 'SAM3 mask';
   }
+  const sam = document.createElement('div');
+  sam.style.fontSize = '0.8rem';
+  sam.style.opacity = '0.8';
+  sam.style.marginTop = '0.5rem';
+  sam.textContent = samText;
+  answerEl.appendChild(sam);
 }
 
 async function ask(){
+  if(askBtn.disabled){ setStatus('Busy, please try again'); return; }
   if(!currentFrame){ setStatus('Capture first'); return; }
   const q = questionInput.value.trim();
   if(!q){ setStatus('Enter a question'); return; }

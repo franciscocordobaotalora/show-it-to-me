@@ -92,7 +92,7 @@ def pass2(image_data_url, view, regions, question, reference_text):
     region_descs = []
     for r in regions:
         label = r.get('label') or r.get('part')
-        region_descs.append(f"{r.get('id')}: {label} ({r.get('part')})")
+        region_descs.append(f"{label}")
     regions_text = '; '.join(region_descs) if region_descs else 'none'
     user_content = [
         {'type':'image_url','image_url':{'url': image_data_url}},
