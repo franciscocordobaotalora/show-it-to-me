@@ -184,19 +184,63 @@ def analyze(data, glimmer_mod, sam_mod):
                     'selection': 'none'
                 })
                 else:
-                    regions.append({
-                    'id': t.get('id'),
-                    'part': part,
-                    'label': label,
-                    'polygon': result.get('polygon'),
-                    'bbox': result.get('bbox'),
-                    'score': float(result.get('score', 0.0)),
-                    'status': 'observed',
-                    'source': 'sam3',
-                    'refined': t.get('refined', False),
-                    'selection': result.get('selection', 'box_prompt'),
-                    'selection_debug': result.get('selection_debug', {})
-                })
+                    # quality gate
+                    bbox = result.get('bbox')
+                    polygon = result.get('polygon')
+                    selection = result.get('selection', 'box_prompt')
+                    reject = False
+                    # bbox area >60% unless board overlap/marks
+                    if bbox:
+                        area = max(0.0, bbox[2]-bbox[0]) * max(0.0, bbox[3]-bbox[1])
+                        if area > 0.6 and not (part == 'board' and selection in ('overlap','marks')):
+                            reject = True
+                    # polygon points <3
+                    if polygon and len(polygon) < 3:
+                        reject = True
+                    # box_prompt IoU <0.2
+                    if selection == 'box_prompt' and t.get('box_1000') and bbox:
+                        box1000 = t.get('box_1000')
+                        req_bbox = [box1000[0]/1000.0, box1000[1]/1000.0, box1000[2]/1000.0, box1000[3]/1000.0]
+                        # iou
+                        x1 = max(bbox[0], req_bbox[0]); y1 = max(bbox[1], req_bbox[1])
+                        x2 = min(bbox[2], req_bbox[2]); y2 = min(bbox[3], req_bbox[3])
+                        inter = max(0.0, x2-x1) * max(0.0, y2-y1)
+                        area_a = max(0.0, bbox[2]-bbox[0]) * max(0.0, bbox[3]-bbox[1])
+                        area_b = max(0.0, req_bbox[2]-req_bbox[0]) * max(0.0, req_bbox[3]-req_bbox[1])
+                        union = area_a + area_b - inter
+                        iou_val = inter/union if union>0 else 0.0
+                        if iou_val < 0.2:
+                            reject = True
+                    if reject:
+                        result = None
+                    if result is None:
+                        regions.append({
+                        'id': t.get('id'),
+                        'part': part,
+                        'label': label,
+                        'polygon': None,
+                        'bbox': None,
+                        'score': 0.0,
+                        'status': 'not_found',
+                        'source': 'sam3',
+                        'refined': t.get('refined', False),
+                        'selection': 'none'
+                    })
+                    else:
+                        regions.append({
+                        'id': t.get('id'),
+                        'part': part,
+                        'label': label,
+                        'polygon': result.get('polygon'),
+                        'bbox': result.get('bbox'),
+                        'score': float(result.get('score', 0.0)),
+                        'status': 'observed',
+                        'source': 'sam3',
+                        'refined': t.get('refined', False),
+                        'selection': result.get('selection', 'box_prompt'),
+                        'selection_debug': result.get('selection_debug', {})
+                    })
+
         except Exception as e:
             import traceback, sys
             traceback.print_exc(file=sys.stderr)
@@ -204,6 +248,9 @@ def analyze(data, glimmer_mod, sam_mod):
             sam_detail = f'{type(e).__name__}: {e}'[:200]
             regions = []
     timings['sam_ms'] = int((time.time() - t_sam_start)*1000)
+    # rule 1a: when needs_view is set, drop regions for parts needing view and board outline
+    if needs_view:
+        regions = [r for r in regions if r.get('part') not in ('microsd_slot','board')]
     # answer from pass1, no separate pass2 unless missing
     answer = p1.get('answer')
     if not answer:
