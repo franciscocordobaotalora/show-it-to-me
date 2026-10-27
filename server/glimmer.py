@@ -4,7 +4,7 @@ MUSE_API_BASE = os.getenv('MUSE_API_BASE','')
 MUSE_API_KEY = os.getenv('MUSE_API_KEY','')
 MODEL = 'muse-glimmer-hackathon'
 
-def _post_chat(messages, timeout=120):
+def _post_chat(messages, timeout=120, max_tokens=None):
     if not MUSE_API_BASE or not MUSE_API_KEY:
         raise RuntimeError('Muse API not configured')
     url = MUSE_API_BASE.rstrip('/')
@@ -16,6 +16,8 @@ def _post_chat(messages, timeout=120):
         'messages': messages,
         'chat_template_kwargs': {'reasoning_strength':'low'}
     }
+    if max_tokens is not None:
+        payload['max_tokens'] = max_tokens
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method='POST')
     req.add_header('Content-Type','application/json')
@@ -45,14 +47,14 @@ def pass1(image_data_url, question, reference_text):
         {'role':'user','content': f'Reference:\n{reference_text}\nQuestion: {question}\nImage URL: {image_data_url}'},
     ]
     try:
-        resp = _post_chat(messages, timeout=120)
+        resp = _post_chat(messages, timeout=120, max_tokens=700)
         content = _extract_content(resp)
         return json.loads(content)
     except json.JSONDecodeError:
         # retry
         messages[0]['content'] = 'Return ONLY valid JSON, no markdown, no reasoning.'
         try:
-            resp = _post_chat(messages, timeout=120)
+            resp = _post_chat(messages, timeout=120, max_tokens=700)
             content = _extract_content(resp)
             return json.loads(content)
         except Exception:
@@ -64,5 +66,5 @@ def pass1(image_data_url, question, reference_text):
 
 def pass2(view, targets, question):
     messages = [{'role':'system','content':'Explain briefly using found regions.'},{'role':'user','content': f'View:{view}\nTargets:{targets}\nQuestion:{question}'}]
-    resp = _post_chat(messages, timeout=120)
+    resp = _post_chat(messages, timeout=120, max_tokens=500)
     return _extract_content(resp)

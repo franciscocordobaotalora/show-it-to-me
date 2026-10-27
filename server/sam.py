@@ -2,11 +2,80 @@ import os, threading
 _lock = threading.Lock()
 _model = None
 _processor = None
-_image_state_cache = {}
 
 class FakeSam:
     def segment(self, image, prompt):
         return []
+
+class SamSession:
+    def __init__(self, image_pil):
+        _load()
+        self.w, self.h = image_pil.size
+        # set image once per session
+        with _lock:
+            self.state = _processor.set_image(image_pil)
+
+    def segment(self, target):
+        try:
+            import torch
+            import numpy as np
+        except Exception as e:
+            raise RuntimeError(f'sam_unavailable: {e}')
+        with _lock:
+            with torch.inference_mode():
+                with torch.autocast('cuda', dtype=torch.bfloat16):
+                    # reset prompts in place, do not assign
+                    _processor.reset_all_prompts(self.state)
+                    box_1000 = target.get('box_1000')
+                    sam_prompt = target.get('sam_prompt', '')
+                    if box_1000:
+                        cxcywh = box1000_to_cxcywh(box_1000)
+                        _processor.add_geometric_prompt(box=cxcywh, label=True, state=self.state)
+                        masks = self.state.get('masks')
+                        scores = self.state.get('scores')
+                        boxes = self.state.get('boxes')
+                        if masks is None or boxes is None:
+                            return None
+                        gx1 = box_1000[0] / 1000.0 * self.w
+                        gy1 = box_1000[1] / 1000.0 * self.h
+                        gx2 = box_1000[2] / 1000.0 * self.w
+                        gy2 = box_1000[3] / 1000.0 * self.h
+                        glimmer_box_px = [gx1, gy1, gx2, gy2]
+                        boxes_np = [b.tolist() for b in boxes]
+                        best_idx, best_iou = pick_by_iou(boxes_np, glimmer_box_px)
+                        if best_idx is None or best_iou < 0.3:
+                            return None
+                        mask = masks[best_idx].cpu().numpy()
+                        if mask.ndim == 3:
+                            mask = mask[0]
+                        polygon = mask_to_polygon(mask, self.w, self.h)
+                        ys, xs = np.where(mask > 0)
+                        if xs.size == 0:
+                            bbox = [0.0, 0.0, 0.0, 0.0]
+                        else:
+                            bbox = [float(xs.min())/self.w, float(ys.min())/self.h, float(xs.max())/self.w, float(ys.max())/self.h]
+                        score = float(scores[best_idx].item()) if scores is not None else 0.0
+                        return {'polygon': polygon, 'bbox': bbox, 'score': score}
+                    else:
+                        _processor.set_text_prompt(sam_prompt, self.state)
+                        masks = self.state.get('masks')
+                        scores = self.state.get('scores')
+                        if masks is None or scores is None or len(scores) == 0:
+                            return None
+                        best_idx = int(torch.argmax(scores).item())
+                        best_score = float(scores[best_idx].item())
+                        if best_score < 0.3:
+                            return None
+                        mask = masks[best_idx].cpu().numpy()
+                        if mask.ndim == 3:
+                            mask = mask[0]
+                        polygon = mask_to_polygon(mask, self.w, self.h)
+                        ys, xs = np.where(mask > 0)
+                        if xs.size == 0:
+                            bbox = [0.0, 0.0, 0.0, 0.0]
+                        else:
+                            bbox = [float(xs.min())/self.w, float(ys.min())/self.h, float(xs.max())/self.w, float(ys.max())/self.h]
+                        return {'polygon': polygon, 'bbox': bbox, 'score': best_score}
 
 def box1000_to_cxcywh(box):
     x1, y1, x2, y2 = box
@@ -101,71 +170,6 @@ def _load():
         raise RuntimeError(f'sam_unavailable: {e}')
 
 def segment(image_pil, target):
-    _load()
-    try:
-        import torch
-        import cv2
-        import numpy as np
-    except Exception as e:
-        raise RuntimeError(f'sam_unavailable: {e}')
-    with _lock:
-        with torch.inference_mode():
-            with torch.autocast('cuda', dtype=torch.bfloat16):
-                img_id = id(image_pil)
-                w, h = image_pil.size
-                if img_id not in _image_state_cache:
-                    state = _processor.set_image(image_pil)
-                    _image_state_cache[img_id] = state
-                else:
-                    state = _image_state_cache[img_id]
-                state = _processor.reset_all_prompts(state)
-                box_1000 = target.get('box_1000')
-                sam_prompt = target.get('sam_prompt', '')
-                if box_1000:
-                    cxcywh = box1000_to_cxcywh(box_1000)
-                    state = _processor.add_geometric_prompt(box=cxcywh, label=True, state=state)
-                    masks = state.get('masks')
-                    scores = state.get('scores')
-                    boxes = state.get('boxes')
-                    if masks is None or boxes is None:
-                        return None
-                    gx1 = box_1000[0] / 1000.0 * w
-                    gy1 = box_1000[1] / 1000.0 * h
-                    gx2 = box_1000[2] / 1000.0 * w
-                    gy2 = box_1000[3] / 1000.0 * h
-                    glimmer_box_px = [gx1, gy1, gx2, gy2]
-                    boxes_np = [b.tolist() for b in boxes]
-                    best_idx, best_iou = pick_by_iou(boxes_np, glimmer_box_px)
-                    if best_idx is None or best_iou < 0.3:
-                        return None
-                    mask = masks[best_idx].cpu().numpy()
-                    if mask.ndim == 3:
-                        mask = mask[0]
-                    polygon = mask_to_polygon(mask, w, h)
-                    ys, xs = np.where(mask > 0)
-                    if xs.size == 0:
-                        bbox = [0.0, 0.0, 0.0, 0.0]
-                    else:
-                        bbox = [float(xs.min())/w, float(ys.min())/h, float(xs.max())/w, float(ys.max())/h]
-                    score = float(scores[best_idx].item()) if scores is not None else 0.0
-                    return {'polygon': polygon, 'bbox': bbox, 'score': score}
-                else:
-                    state = _processor.set_text_prompt(sam_prompt, state)
-                    masks = state.get('masks')
-                    scores = state.get('scores')
-                    if masks is None or scores is None or len(scores) == 0:
-                        return None
-                    best_idx = int(torch.argmax(scores).item())
-                    best_score = float(scores[best_idx].item())
-                    if best_score < 0.3:
-                        return None
-                    mask = masks[best_idx].cpu().numpy()
-                    if mask.ndim == 3:
-                        mask = mask[0]
-                    polygon = mask_to_polygon(mask, w, h)
-                    ys, xs = np.where(mask > 0)
-                    if xs.size == 0:
-                        bbox = [0.0, 0.0, 0.0, 0.0]
-                    else:
-                        bbox = [float(xs.min())/w, float(ys.min())/h, float(xs.max())/w, float(ys.max())/h]
-                    return {'polygon': polygon, 'bbox': bbox, 'score': best_score}
+    # Thin wrapper for backward compatibility; creates a fresh session per call
+    session = SamSession(image_pil)
+    return session.segment(target)

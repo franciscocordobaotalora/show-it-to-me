@@ -32,6 +32,7 @@ def analyze(data, glimmer_mod, sam_mod):
         return 400, {'error':'invalid_image'}
     if len(img_bytes) > MAX_SIZE:
         return 400, {'error':'image_too_large'}
+    t_decode_start = time.time()
     try:
         from PIL import Image, ImageOps
         img = Image.open(io.BytesIO(img_bytes))
@@ -51,9 +52,10 @@ def analyze(data, glimmer_mod, sam_mod):
     except Exception:
         return 400, {'error':'corrupt_image'}
     # reference text
-    from reference import get_reference_text, get_part_side
+    from reference import get_reference_text, get_part_side, get_part_label
     ref_text = get_reference_text()
     timings = {}
+    timings['decode_ms'] = int((time.time() - t_decode_start)*1000)
     t0 = time.time()
     # glimmer pass1
     try:
@@ -81,28 +83,39 @@ def analyze(data, glimmer_mod, sam_mod):
     # SAM segmentation
     regions = []
     sam_status = None
+    sam_detail = None
+    t_sam_start = time.time()
     try:
         for t in targets:
             try:
                 result = sam_mod.segment(img, t)
             except RuntimeError as e:
+                import traceback, sys
+                traceback.print_exc(file=sys.stderr)
                 if 'sam_unavailable' in str(e):
                     sam_status = 'sam_unavailable'
+                    sam_detail = str(e)[:200]
                     regions = []
                     break
                 else:
                     sam_status = 'sam_error'
+                    sam_detail = f'{type(e).__name__}: {e}'[:200]
                     regions = []
                     break
-            except Exception:
+            except Exception as e:
+                import traceback, sys
+                traceback.print_exc(file=sys.stderr)
                 sam_status = 'sam_error'
+                sam_detail = f'{type(e).__name__}: {e}'[:200]
                 regions = []
                 break
+            part = t.get('part')
+            label = get_part_label(part) if part else part
             if result is None:
                 regions.append({
                     'id': t.get('id'),
-                    'part': t.get('part'),
-                    'label': t.get('part'),
+                    'part': part,
+                    'label': label,
                     'polygon': None,
                     'bbox': None,
                     'score': 0.0,
@@ -112,25 +125,36 @@ def analyze(data, glimmer_mod, sam_mod):
             else:
                 regions.append({
                     'id': t.get('id'),
-                    'part': t.get('part'),
-                    'label': t.get('part'),
+                    'part': part,
+                    'label': label,
                     'polygon': result.get('polygon'),
                     'bbox': result.get('bbox'),
                     'score': float(result.get('score', 0.0)),
                     'status': 'observed',
                     'source': 'sam3'
                 })
-    except Exception:
+    except Exception as e:
+        import traceback, sys
+        traceback.print_exc(file=sys.stderr)
         sam_status = 'sam_error'
+        sam_detail = f'{type(e).__name__}: {e}'[:200]
         regions = []
+    timings['sam_ms'] = int((time.time() - t_sam_start)*1000)
     # glimmer pass2
+    t_pass2_start = time.time()
     try:
         explanation = glimmer_mod.pass2(p1.get('view'), targets, question)
-        # strip bracketed number groups
-        explanation = re.sub(r'[~\[\]0-9, ]+', '', explanation)
+        # strip bracketed coordinate lists only, preserve digits/spaces elsewhere
+        explanation = re.sub(r'~?\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]', '', explanation)
+        explanation = re.sub(r'\(\s*\d+\s*,\s*\d+\s*\)', '', explanation)
         explanation = re.sub(r'\s+', ' ', explanation).strip()
     except Exception:
         explanation = 'Explanation unavailable'
+    timings['pass2_ms'] = int((time.time() - t_pass2_start)*1000)
+    timings['total_ms'] = int((time.time() - t_decode_start)*1000)
+    provenance = {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings}
+    if sam_detail:
+        provenance['sam_detail'] = sam_detail
     resp = {
         'frameId': frameId,
         'requestId': requestId,
@@ -139,7 +163,7 @@ def analyze(data, glimmer_mod, sam_mod):
         'explanation': explanation,
         'needs_view': needs_view,
         'sources': [],
-        'provenance': {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings}
+        'provenance': provenance
     }
     return 200, resp
 

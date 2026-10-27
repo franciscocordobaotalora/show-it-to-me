@@ -48,3 +48,9 @@ def get_part_side(part):
         if r['part'] == part:
             return r['side']
     return None
+
+def get_part_label(part):
+    for r in REFERENCES:
+        if r['part'] == part:
+            return r['name']
+    return part
