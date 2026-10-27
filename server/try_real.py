@@ -1,13 +1,19 @@
-import os, json, urllib.request
+import os, json, base64
 
 def main():
-    base = os.getenv('MUSE_API_BASE')
-    key = os.getenv('MUSE_API_KEY')
-    if not base or not key:
-        print('Muse env not set')
+    from glimmer import pass1
+    from reference import get_reference_text
+    path = 'app/fixtures/pi5/Raspberry_Pi_5_Board.jpg'
+    try:
+        with open(path,'rb') as f:
+            b64 = base64.b64encode(f.read()).decode()
+    except:
+        print(json.dumps({'error':'fixture missing'}))
         return
-    # placeholder
-    print(json.dumps({'status':'no-op'}))
+    data_url = 'data:image/jpeg;base64,'+b64
+    ref = get_reference_text()
+    result = pass1(data_url, 'Where does the fan plug in?', ref)
+    print(json.dumps(result, indent=2))
 
 if __name__ == '__main__':
     main()

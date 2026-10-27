@@ -24,14 +24,14 @@ def _post_chat(messages, timeout=120):
         body = resp.read()
     return json.loads(body)
 
+class GlimmerError(Exception):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
 def _extract_content(resp):
     msg = resp['choices'][0]['message']
     content = msg.get('content','')
-    # strip reasoning markers if present
-    if 'reasoning_content' in msg:
-        # keep content only
-        pass
-    # strip code fences
     if content.strip().startswith('```'):
         content = content.strip()[3:]
         if content.startswith('json'):
@@ -41,21 +41,28 @@ def _extract_content(resp):
 
 def pass1(image_data_url, question, reference_text):
     messages = [
-        {'role':'system','content':'You are a visual assistant. Return strict JSON with keys view, needs_view, targets, reply_hint.'},
-        {'role':'user','content': f'Reference:\n{reference_text}\nQuestion: {question}\nImage: {image_data_url}'},
+        {'role':'system','content':'Return strict JSON with view, needs_view, targets[{id,part,sam_prompt,box_1000}], reply_hint.'},
+        {'role':'user','content': f'Reference:\n{reference_text}\nQuestion: {question}\nImage URL: {image_data_url}'},
     ]
     try:
-        resp = _post_chat(messages)
+        resp = _post_chat(messages, timeout=120)
         content = _extract_content(resp)
         return json.loads(content)
+    except json.JSONDecodeError:
+        # retry
+        messages[0]['content'] = 'Return ONLY valid JSON, no markdown, no reasoning.'
+        try:
+            resp = _post_chat(messages, timeout=120)
+            content = _extract_content(resp)
+            return json.loads(content)
+        except Exception:
+            raise GlimmerError('glimmer_bad_json')
+    except TimeoutError:
+        raise GlimmerError('glimmer_timeout')
     except Exception:
-        # retry with stricter reminder
-        messages[0]['content'] = 'Return ONLY valid JSON, no markdown.'
-        resp = _post_chat(messages)
-        content = _extract_content(resp)
-        return json.loads(content)
+        raise GlimmerError('glimmer_unreachable')
 
 def pass2(view, targets, question):
-    messages = [{'role':'system','content':'Explain using found regions.'},{'role':'user','content': question}]
-    resp = _post_chat(messages)
-    return resp['choices'][0]['message']['content']
+    messages = [{'role':'system','content':'Explain briefly using found regions.'},{'role':'user','content': f'View:{view}\nTargets:{targets}\nQuestion:{question}'}]
+    resp = _post_chat(messages, timeout=120)
+    return _extract_content(resp)
