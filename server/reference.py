@@ -3,31 +3,48 @@ REFERENCES = [
     {
         "part": "fan_connector",
         "name": "FAN header",
-        "location": "top, near USB ports",
-        "source": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
+        "side": "top",
+        "description": "4-pin white socket labelled FAN near the USB ports",
+        "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
+    },
+    {
+        "part": "active_cooler_fan",
+        "name": "Active cooler fan",
+        "side": "top",
+        "description": "Fan plugs into FAN header",
+        "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
         "part": "usb_c_power_port",
         "name": "USB-C power J1",
-        "location": "top, lower-left",
-        "source": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
+        "side": "top",
+        "description": "USB-C power port lower-left",
+        "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
         "part": "micro_hdmi_port",
         "name": "micro-HDMI",
-        "location": "top",
-        "source": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
+        "side": "top",
+        "description": "Two micro-HDMI ports",
+        "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
         "part": "microsd_slot",
         "name": "microSD slot",
-        "location": "underside right",
-        "source": "https://www.raspberrypi.com/documentation/computers/getting-started.html"
+        "side": "underside",
+        "description": "microSD slot on underside right",
+        "source_url": "https://www.raspberrypi.com/documentation/computers/getting-started.html"
     },
 ]
 
 def get_reference_text():
     lines = []
     for r in REFERENCES:
-        lines.append(f"{r['name']} ({r['part']}): {r['location']} – {r['source']}")
+        lines.append(f"{r['name']} ({r['part']}): {r['description']} side={r['side']} – {r['source_url']}")
     return "\n".join(lines)
+
+def get_part_side(part):
+    for r in REFERENCES:
+        if r['part'] == part:
+            return r['side']
+    return None
