@@ -169,3 +169,32 @@ def pass2(image_data_url, view, regions, question, reference_text):
     if content is None:
         raise GlimmerError('glimmer_truncated')
     return content
+
+def pick_candidate(image_pil, description, n):
+    import io, base64, re
+    buf = io.BytesIO()
+    image_pil.save(buf, format='JPEG', quality=90)
+    data_url = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+    system_prompt = f'Return ONLY a single integer between 0 and {n-1} inclusive, or -1 if none matches. No extra text.'
+    user_text = f'Numbered yellow boxes mark candidate parts on this image. Which box number is exactly {description}? Reply ONLY with the number, or -1 if none.'
+    messages = [
+        {'role':'system','content': system_prompt},
+        {'role':'user','content': [
+            {'type':'image_url','image_url':{'url': data_url}},
+            {'type':'text','text': user_text}
+        ]}
+    ]
+    try:
+        resp = _post_chat(messages, timeout=120, max_tokens=300)
+        content = _extract_content(resp)
+        if not content:
+            return None
+        m = re.search(r'-?\d+', content)
+        if not m:
+            return None
+        num = int(m.group())
+        if num == -1 or num < 0 or num >= n:
+            return None
+        return num
+    except Exception:
+        return None
