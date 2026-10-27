@@ -65,7 +65,7 @@ def analyze(data, glimmer_mod, sam_mod):
     except Exception:
         return 400, {'error':'corrupt_image'}
     # reference text
-    from reference import get_reference_text, get_part_side, get_part_label, get_part_visual
+    from reference import get_reference_text, get_part_side, get_part_label, get_part_visual, get_part_sam_prompts
     ref_text = get_reference_text()
     ref_text = f"Image size: {img.width} x {img.height} pixels\n{ref_text}"
     timings = {}
@@ -107,6 +107,13 @@ def analyze(data, glimmer_mod, sam_mod):
     for t in targets:
         if t.get('box_1000'):
             part = t.get('part')
+            try:
+                prompts = get_part_sam_prompts(part)
+            except Exception:
+                prompts = []
+            if prompts:
+                t['refined'] = False
+                continue
             desc = get_part_visual(part)
             refined_box = None
             if desc and hasattr(glimmer_mod, 'refine_box'):
@@ -187,7 +194,8 @@ def analyze(data, glimmer_mod, sam_mod):
                     'status': 'observed',
                     'source': 'sam3',
                     'refined': t.get('refined', False),
-                    'selection': result.get('selection', 'box_prompt')
+                    'selection': result.get('selection', 'box_prompt'),
+                    'selection_debug': result.get('selection_debug', {})
                 })
         except Exception as e:
             import traceback, sys
@@ -196,21 +204,33 @@ def analyze(data, glimmer_mod, sam_mod):
             sam_detail = f'{type(e).__name__}: {e}'[:200]
             regions = []
     timings['sam_ms'] = int((time.time() - t_sam_start)*1000)
-    # glimmer pass2
-    t_pass2_start = time.time()
-    try:
-        explanation = glimmer_mod.pass2(data_url, p1.get('view'), regions, question, ref_text)
-        # strip bracketed coordinate lists only, preserve digits/spaces elsewhere
-        explanation = re.sub(r'~?\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]', '', explanation)
-        explanation = re.sub(r'\(\s*\d+\s*,\s*\d+\s*\)', '', explanation)
-        # strip raw part ids
-        explanation = re.sub(r'\b[a-z]+_[a-z_]+\b', '', explanation)
-        explanation = re.sub(r'\s+', ' ', explanation).strip()
-    except Exception:
-        explanation = 'Explanation unavailable'
-    timings['pass2_ms'] = int((time.time() - t_pass2_start)*1000)
+    # answer from pass1, no separate pass2 unless missing
+    answer = p1.get('answer')
+    if not answer:
+        # fallback to pass2 for backward compatibility / tests
+        try:
+            explanation = glimmer_mod.pass2(data_url, p1.get('view'), regions, question, ref_text)
+            explanation = re.sub(r'~?\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]', '', explanation)
+            explanation = re.sub(r'\(\s*\d+\s*,\s*\d+\s*\)', '', explanation)
+            explanation = re.sub(r'\b[a-z]+_[a-z_]+\b', '', explanation)
+            explanation = re.sub(r'\s+', ' ', explanation).strip()
+            answer = explanation
+        except Exception:
+            labels = [r.get('label') for r in regions if r.get('status')=='observed']
+            if labels:
+                answer = 'Found ' + ', '.join(labels) + '.'
+            else:
+                answer = 'No parts identified.'
+    explanation = answer
     timings['total_ms'] = int((time.time() - t_decode_start)*1000)
-    provenance = {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings}
+    timings['pass2_ms'] = 0
+    steps = [
+        {'name':'decode','ms':timings.get('decode_ms')},
+        {'name':'pass1','ms':timings.get('pass1_ms')},
+        {'name':'sam','ms':timings.get('sam_ms')},
+        {'name':'total','ms':timings.get('total_ms')}
+    ]
+    provenance = {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings,'steps':steps}
     if sam_detail:
         provenance['sam_detail'] = sam_detail
     resp = {

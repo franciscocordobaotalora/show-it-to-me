@@ -45,13 +45,14 @@ def _extract_content(resp):
 
 def pass1(image_data_url, question, reference_text):
     system_prompt = (
-        'Return strict JSON with keys view, needs_view, targets. '
+        'Return strict JSON with keys view, needs_view, targets, answer. '
         'Each target has id, part, sam_prompt, box_1000. '
         'Boxes are x1,y1,x2,y2 in 0..1000 of the image shown. '
         'Allowed parts: fan_connector, usb_c_power_port, micro_hdmi_port, microsd_slot, active_cooler_fan, board. '
         'For micro-HDMI, emit TWO targets: id micro_hdmi_port_0 left, id micro_hdmi_port_1 right, part micro_hdmi_port. '
         'view is top|underside|unknown. '
-        'Example: {"view":"top","needs_view":null,"targets":[{"id":"1","part":"fan_connector","sam_prompt":"fan header","box_1000":[100,200,300,400]}]}'
+        'answer is 2 sentences max, labels only, no ids, no coordinates. '
+        'Example: {"view":"top","needs_view":null,"answer":"The fan header is at the top edge. The USB-C port is at the bottom left.","targets":[{"id":"1","part":"fan_connector","sam_prompt":"fan header","box_1000":[100,200,300,400]}]}'
     )
     user_content = [
         {'type':'image_url','image_url':{'url': image_data_url}},

@@ -309,7 +309,10 @@ async function ask(){
   const requestId = crypto.randomUUID();
   pendingFrameId = frameId;
   pendingRequestId = requestId;
-  setStatus('Looking... can take up to a minute');
+  const stages = ['Looking at the photo...','Finding the part...','Writing the answer...'];
+  let stageIdx = 0;
+  setStatus(stages[stageIdx]);
+  const stageInterval = setInterval(()=>{ stageIdx = (stageIdx+1)%stages.length; setStatus(stages[stageIdx]); }, 6000);
   askBtn.disabled = true;
   clearOverlay();
   clearAnswer();
@@ -357,6 +360,7 @@ async function ask(){
       setStatus('Network error');
     }
   }finally{
+    clearInterval(stageInterval);
     askBtn.disabled = false;
     abortController = null;
   }
