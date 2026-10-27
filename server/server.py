@@ -104,7 +104,6 @@ def analyze(data, glimmer_mod, sam_mod):
     try:
         explanation = glimmer_mod.pass2(p1.get('view'), targets, question)
         # strip bracketed number groups
-        import re
         explanation = re.sub(r'[~\[\]0-9, ]+', '', explanation)
         explanation = re.sub(r'\s+', ' ', explanation).strip()
     except Exception:
