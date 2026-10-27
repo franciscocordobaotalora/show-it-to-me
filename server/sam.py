@@ -27,10 +27,64 @@ class SamSession:
         with _lock:
             with torch.inference_mode():
                 with torch.autocast('cuda', dtype=torch.bfloat16):
-                    # reset prompts in place, do not assign
                     _processor.reset_all_prompts(self.state)
                     box_1000 = target.get('box_1000')
-                    sam_prompt = target.get('sam_prompt', '')
+                    part = target.get('part')
+                    # candidate text prompt selection
+                    if box_1000 and part:
+                        # get sam prompts from reference
+                        try:
+                            from reference import get_part_sam_prompts
+                            prompts = get_part_sam_prompts(part)
+                        except Exception:
+                            prompts = []
+                        gx1 = box_1000[0] / 1000.0 * self.w
+                        gy1 = box_1000[1] / 1000.0 * self.h
+                        gx2 = box_1000[2] / 1000.0 * self.w
+                        gy2 = box_1000[3] / 1000.0 * self.h
+                        glimmer_box_px = [gx1, gy1, gx2, gy2]
+                        best_candidate = None
+                        best_iou = -1.0
+                        # temporarily lower confidence
+                        orig_thresh = getattr(_processor, 'confidence_threshold', 0.3)
+                        try:
+                            _processor.confidence_threshold = 0.25
+                            for prompt in prompts:
+                                _processor.reset_all_prompts(self.state)
+                                _processor.set_text_prompt(prompt, self.state)
+                                masks = self.state.get('masks')
+                                scores = self.state.get('scores')
+                                boxes = self.state.get('boxes')
+                                if masks is None or boxes is None or scores is None:
+                                    continue
+                                boxes_np = [b.tolist() for b in boxes]
+                                # find best IoU for this prompt
+                                for i, b in enumerate(boxes_np):
+                                    iou_val = iou(b, glimmer_box_px)
+                                    if iou_val > best_iou:
+                                        best_iou = iou_val
+                                        best_candidate = {
+                                            'idx': i,
+                                            'mask': masks[i],
+                                            'score': float(scores[i].item()),
+                                            'box': b
+                                        }
+                                if best_iou >= 0.25:
+                                    break
+                        finally:
+                            _processor.confidence_threshold = orig_thresh
+                        if best_candidate and best_iou >= 0.25:
+                            mask = best_candidate['mask'].cpu().numpy()
+                            if mask.ndim == 3:
+                                mask = mask[0]
+                            polygon = mask_to_polygon(mask, self.w, self.h)
+                            ys, xs = np.where(mask > 0)
+                            if xs.size == 0:
+                                bbox = [0.0, 0.0, 0.0, 0.0]
+                            else:
+                                bbox = [float(xs.min())/self.w, float(ys.min())/self.h, float(xs.max())/self.w, float(ys.max())/self.h]
+                            return {'polygon': polygon, 'bbox': bbox, 'score': best_candidate['score'], 'selection': 'sam_text_candidate'}
+                    # fallback to geometric box prompt
                     if box_1000:
                         cxcywh = box1000_to_cxcywh(box_1000)
                         _processor.add_geometric_prompt(box=cxcywh, label=True, state=self.state)
@@ -58,27 +112,28 @@ class SamSession:
                         else:
                             bbox = [float(xs.min())/self.w, float(ys.min())/self.h, float(xs.max())/self.w, float(ys.max())/self.h]
                         score = float(scores[best_idx].item()) if scores is not None else 0.0
-                        return {'polygon': polygon, 'bbox': bbox, 'score': score}
+                        return {'polygon': polygon, 'bbox': bbox, 'score': score, 'selection': 'box_prompt'}
+                    # no box, fallback to text prompt
+                    sam_prompt = target.get('sam_prompt', '')
+                    _processor.set_text_prompt(sam_prompt, self.state)
+                    masks = self.state.get('masks')
+                    scores = self.state.get('scores')
+                    if masks is None or scores is None or len(scores) == 0:
+                        return None
+                    best_idx = int(torch.argmax(scores).item())
+                    best_score = float(scores[best_idx].item())
+                    if best_score < 0.3:
+                        return None
+                    mask = masks[best_idx].cpu().numpy()
+                    if mask.ndim == 3:
+                        mask = mask[0]
+                    polygon = mask_to_polygon(mask, self.w, self.h)
+                    ys, xs = np.where(mask > 0)
+                    if xs.size == 0:
+                        bbox = [0.0, 0.0, 0.0, 0.0]
                     else:
-                        _processor.set_text_prompt(sam_prompt, self.state)
-                        masks = self.state.get('masks')
-                        scores = self.state.get('scores')
-                        if masks is None or scores is None or len(scores) == 0:
-                            return None
-                        best_idx = int(torch.argmax(scores).item())
-                        best_score = float(scores[best_idx].item())
-                        if best_score < 0.3:
-                            return None
-                        mask = masks[best_idx].cpu().numpy()
-                        if mask.ndim == 3:
-                            mask = mask[0]
-                        polygon = mask_to_polygon(mask, self.w, self.h)
-                        ys, xs = np.where(mask > 0)
-                        if xs.size == 0:
-                            bbox = [0.0, 0.0, 0.0, 0.0]
-                        else:
-                            bbox = [float(xs.min())/self.w, float(ys.min())/self.h, float(xs.max())/self.w, float(ys.max())/self.h]
-                        return {'polygon': polygon, 'bbox': bbox, 'score': best_score}
+                        bbox = [float(xs.min())/self.w, float(ys.min())/self.h, float(xs.max())/self.w, float(ys.max())/self.h]
+                    return {'polygon': polygon, 'bbox': bbox, 'score': best_score, 'selection': 'box_prompt'}
 
 def box1000_to_cxcywh(box):
     x1, y1, x2, y2 = box

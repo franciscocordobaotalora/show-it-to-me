@@ -172,7 +172,9 @@ def analyze(data, glimmer_mod, sam_mod):
                     'bbox': None,
                     'score': 0.0,
                     'status': 'not_found',
-                    'source': 'sam3'
+                    'source': 'sam3',
+                    'refined': t.get('refined', False),
+                    'selection': 'none'
                 })
                 else:
                     regions.append({
@@ -183,7 +185,9 @@ def analyze(data, glimmer_mod, sam_mod):
                     'bbox': result.get('bbox'),
                     'score': float(result.get('score', 0.0)),
                     'status': 'observed',
-                    'source': 'sam3'
+                    'source': 'sam3',
+                    'refined': t.get('refined', False),
+                    'selection': result.get('selection', 'box_prompt')
                 })
         except Exception as e:
             import traceback, sys

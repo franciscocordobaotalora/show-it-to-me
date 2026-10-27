@@ -6,6 +6,7 @@ REFERENCES = [
         "side": "top",
         "description": "4-pin white socket labelled FAN near the USB ports",
         "visual": "small white 4-pin JST socket labelled FAN at the top edge just left of the silver USB stack",
+        "sam_prompts": ["white connector", "port"],
         "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
@@ -14,6 +15,7 @@ REFERENCES = [
         "side": "top",
         "description": "Fan plugs into FAN header",
         "visual": "the fan on the heatsink",
+        "sam_prompts": ["fan"],
         "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
@@ -22,6 +24,7 @@ REFERENCES = [
         "side": "top",
         "description": "USB-C power port lower-left",
         "visual": "silver USB-C connector at the bottom-left corner labelled J1/PWR",
+        "sam_prompts": ["port"],
         "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
@@ -30,6 +33,7 @@ REFERENCES = [
         "side": "top",
         "description": "Two micro-HDMI ports",
         "visual": "two silver ports on the bottom edge, HDMI0 left and HDMI1 right",
+        "sam_prompts": ["port"],
         "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
@@ -38,6 +42,7 @@ REFERENCES = [
         "side": "underside",
         "description": "microSD slot on underside right",
         "visual": "brown push-push holder at the right edge of the UNDERSIDE",
+        "sam_prompts": ["microSD card", "memory card"],
         "source_url": "https://www.raspberrypi.com/documentation/computers/getting-started.html"
     },
 ]
@@ -67,3 +72,9 @@ def get_part_visual(part):
         if r['part'] == part:
             return r.get('visual','')
     return ''
+
+def get_part_sam_prompts(part):
+    for r in REFERENCES:
+        if r['part'] == part:
+            return r.get('sam_prompts',[])
+    return []
