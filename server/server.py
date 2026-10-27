@@ -53,9 +53,12 @@ def analyze(data, glimmer_mod, sam_mod):
     # reference text
     from reference import get_reference_text, get_part_side
     ref_text = get_reference_text()
+    timings = {}
+    t0 = time.time()
     # glimmer pass1
     try:
         p1 = glimmer_mod.pass1(data_url, question, ref_text)
+        timings['pass1_ms'] = int((time.time()-t0)*1000)
     except GlimmerError as e:
         if e.code == 'glimmer_timeout':
             return 504, {'error':'glimmer_timeout'}
@@ -64,16 +67,15 @@ def analyze(data, glimmer_mod, sam_mod):
         return 502, {'error':'glimmer_unreachable'}
     except Exception:
         return 502, {'error':'glimmer_unreachable'}
-    # enforce reference rules
+    # enforce reference rules and needs_view validation
     needs_view = p1.get('needs_view')
+    if needs_view not in (None, 'flip_board', 'closer'):
+        needs_view = None
     targets = p1.get('targets',[])
-    # microSD on top view rule
     for t in targets:
         if t.get('part') == 'microsd_slot' and get_part_side('microsd_slot') == 'underside':
-            # if view is top, enforce needs_view
             if p1.get('view') == 'top' or p1.get('view') is None:
                 needs_view = 'flip_board'
-                # drop microsd target
                 targets = [x for x in targets if x.get('part') != 'microsd_slot']
                 break
     # SAM segmentation
@@ -101,6 +103,10 @@ def analyze(data, glimmer_mod, sam_mod):
     # glimmer pass2
     try:
         explanation = glimmer_mod.pass2(p1.get('view'), targets, question)
+        # strip bracketed number groups
+        import re
+        explanation = re.sub(r'[~\[\]0-9, ]+', '', explanation)
+        explanation = re.sub(r'\s+', ' ', explanation).strip()
     except Exception:
         explanation = 'Explanation unavailable'
     resp = {
@@ -111,7 +117,7 @@ def analyze(data, glimmer_mod, sam_mod):
         'explanation': explanation,
         'needs_view': needs_view,
         'sources': [],
-        'provenance': {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status}
+        'provenance': {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings}
     }
     return 200, resp
 
