@@ -52,5 +52,51 @@ class TestAnalyze(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertEqual(body['regions'],[])
 
+    def test_contract_segment_receives_target_dict(self):
+        class RecordingSam:
+            def __init__(self):
+                self.calls = []
+            def segment(self, img, target):
+                self.calls.append((img, target))
+                assert isinstance(target, dict)
+                assert 'part' in target
+                assert 'sam_prompt' in target
+                # return different results per target
+                if target.get('id') == 'a':
+                    return {'polygon': [[0.1,0.1],[0.2,0.1],[0.2,0.2]], 'bbox': [0.1,0.1,0.2,0.2], 'score': 0.8}
+                return None
+        rec = RecordingSam()
+        data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
+        targets = [
+            {'id':'a','part':'fan_connector','sam_prompt':'fan','box_1000':[100,100,200,200]},
+            {'id':'b','part':'usb_c_power_port','sam_prompt':'usb','box_1000':None}
+        ]
+        glimmer = FakeGlimmer({'view':'top','needs_view':None,'targets':targets})
+        status, body = analyze(data, glimmer, rec)
+        self.assertEqual(status,200)
+        self.assertEqual(len(body['regions']),2)
+        r0 = body['regions'][0]
+        self.assertEqual(r0['id'],'a')
+        self.assertEqual(r0['status'],'observed')
+        self.assertEqual(r0['source'],'sam3')
+        self.assertIsNotNone(r0['polygon'])
+        self.assertAlmostEqual(r0['score'],0.8)
+        r1 = body['regions'][1]
+        self.assertEqual(r1['id'],'b')
+        self.assertEqual(r1['status'],'not_found')
+        self.assertIsNone(r1['polygon'])
+        self.assertEqual(len(rec.calls),2)
+
+    def test_sam_error_status(self):
+        class BoomSam:
+            def segment(self, img, target):
+                raise RuntimeError('boom')
+        data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
+        glimmer = FakeGlimmer({'view':'top','needs_view':None,'targets':[{'id':'1','part':'board','sam_prompt':'board'}]})
+        status, body = analyze(data, glimmer, BoomSam())
+        self.assertEqual(status,200)
+        self.assertEqual(body['regions'],[])
+        self.assertEqual(body['provenance']['sam_model'],'sam_error')
+
 if __name__ == '__main__':
     unittest.main()

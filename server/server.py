@@ -83,23 +83,46 @@ def analyze(data, glimmer_mod, sam_mod):
     sam_status = None
     try:
         for t in targets:
-            masks = sam_mod.segment(img, t.get('sam_prompt',''))
-            # placeholder: ignore masks
-            regions.append({
-                'id': t.get('id'),
-                'part': t.get('part'),
-                'label': t.get('part'),
-                'bbox': t.get('box_1000'),
-                'score': 0.0,
-                'status': 'observed',
-                'source': 'sam3'
-            })
-    except RuntimeError as e:
-        if 'sam_unavailable' in str(e):
-            sam_status = 'sam_unavailable'
-            regions = []
-        else:
-            raise
+            try:
+                result = sam_mod.segment(img, t)
+            except RuntimeError as e:
+                if 'sam_unavailable' in str(e):
+                    sam_status = 'sam_unavailable'
+                    regions = []
+                    break
+                else:
+                    sam_status = 'sam_error'
+                    regions = []
+                    break
+            except Exception:
+                sam_status = 'sam_error'
+                regions = []
+                break
+            if result is None:
+                regions.append({
+                    'id': t.get('id'),
+                    'part': t.get('part'),
+                    'label': t.get('part'),
+                    'polygon': None,
+                    'bbox': None,
+                    'score': 0.0,
+                    'status': 'not_found',
+                    'source': 'sam3'
+                })
+            else:
+                regions.append({
+                    'id': t.get('id'),
+                    'part': t.get('part'),
+                    'label': t.get('part'),
+                    'polygon': result.get('polygon'),
+                    'bbox': result.get('bbox'),
+                    'score': float(result.get('score', 0.0)),
+                    'status': 'observed',
+                    'source': 'sam3'
+                })
+    except Exception:
+        sam_status = 'sam_error'
+        regions = []
     # glimmer pass2
     try:
         explanation = glimmer_mod.pass2(p1.get('view'), targets, question)
@@ -137,19 +160,24 @@ class Handler(BaseHTTPRequestHandler):
         if not lock.acquire(blocking=False):
             self._json(429, {'error':'too_many_requests'}); return
         try:
-            if 'Content-Length' not in self.headers:
-                self._json(411, {'error':'length_required'}); return
-            length = int(self.headers.get('Content-Length',0))
-            if length > 14*1024*1024:
-                self._json(413, {'error':'payload_too_large'}); return
-            body = self.rfile.read(length)
             try:
-                data = json.loads(body)
-            except:
-                self._json(400, {'error':'invalid_json'}); return
-            import glimmer, sam
-            status, resp = analyze(data, glimmer, sam)
-            self._json(status, resp)
+                if 'Content-Length' not in self.headers:
+                    self._json(411, {'error':'length_required'}); return
+                length = int(self.headers.get('Content-Length',0))
+                if length > 14*1024*1024:
+                    self._json(413, {'error':'payload_too_large'}); return
+                body = self.rfile.read(length)
+                try:
+                    data = json.loads(body)
+                except:
+                    self._json(400, {'error':'invalid_json'}); return
+                import glimmer, sam
+                status, resp = analyze(data, glimmer, sam)
+                self._json(status, resp)
+            except Exception:
+                import traceback, sys
+                traceback.print_exc(file=sys.stderr)
+                self._json(500, {'error':'internal'})
         finally:
             lock.release()
     def log_message(self, *args):
