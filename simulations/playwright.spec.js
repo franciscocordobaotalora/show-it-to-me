@@ -133,12 +133,14 @@ test.describe('Show It To Me T01', () => {
   test('resize after drawing preserves overlay', async ({ page }) => {
     await page.goto(BASE);
     await page.route('**/api/analyze', route => {
+      const req = route.request();
+      const body = req.postDataJSON ? req.postDataJSON() : {};
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          frameId: 'sim',
-          requestId: 'sim',
+          frameId: body.frameId || 'sim',
+          requestId: body.requestId || 'sim',
           view: 'top',
           regions: [{
             id: 'sim-1',
@@ -243,12 +245,14 @@ test.describe('Show It To Me T03E simulated', () => {
   test('two polygons drawn with pixel assertions SIMULATED', async ({ page }) => {
     await page.goto(BASE);
     await page.route('**/api/analyze', route => {
+      const req = route.request();
+      const body = req.postDataJSON ? req.postDataJSON() : {};
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          frameId: 'f1',
-          requestId: 'r1',
+          frameId: body.frameId || 'f1',
+          requestId: body.requestId || 'r1',
           view: 'top',
           regions: [
             { id: '1', part: 'fan_connector', label: 'Fan connector', polygon: [[0.2,0.2],[0.3,0.2],[0.3,0.3],[0.2,0.3]], bbox:[0.2,0.2,0.3,0.3], score:0.9, status:'observed', source:'sam3' },
@@ -309,12 +313,14 @@ test.describe('Show It To Me T03E simulated', () => {
   test('needs_view banner SIMULATED', async ({ page }) => {
     await page.goto(BASE);
     await page.route('**/api/analyze', route => {
+      const req = route.request();
+      const body = req.postDataJSON ? req.postDataJSON() : {};
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          frameId: 'f',
-          requestId: 'r',
+          frameId: body.frameId || 'f',
+          requestId: body.requestId || 'r',
           view: 'top',
           regions: [],
           explanation: 'flip',

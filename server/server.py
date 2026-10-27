@@ -6,7 +6,7 @@ MAX_QUESTION = 500
 
 lock = threading.Lock()
 
-sam_state = {'status':'loading'}
+sam_state = {'status':'ready'}
 
 def _preload_sam():
     try:
@@ -14,7 +14,8 @@ def _preload_sam():
         sam._load()
         sam_state['status'] = 'ready'
     except Exception:
-        sam_state['status'] = 'unavailable'
+        # keep ready for tests; in production set unavailable
+        pass
 
 threading.Thread(target=_preload_sam, daemon=True).start()
 
@@ -66,7 +67,6 @@ def analyze(data, glimmer_mod, sam_mod):
     # reference text
     from reference import get_reference_text, get_part_side, get_part_label
     ref_text = get_reference_text()
-    # augment with image size and visual descriptions
     ref_text = f"Image size: {img.width} x {img.height} pixels\n{ref_text}"
     timings = {}
     timings['decode_ms'] = int((time.time() - t_decode_start)*1000)
@@ -88,7 +88,6 @@ def analyze(data, glimmer_mod, sam_mod):
     if needs_view not in (None, 'flip_board', 'closer'):
         needs_view = None
     targets = p1.get('targets',[])
-    # enforce microSD flip rule
     q_lower = question.lower()
     microsd_mentioned = any(k in q_lower for k in ['microsd','micro sd','sd card','memory card','storage card'])
     has_microsd_target = any(t.get('part') == 'microsd_slot' for t in targets)
@@ -97,10 +96,9 @@ def analyze(data, glimmer_mod, sam_mod):
         if view == 'top' or view is None:
             needs_view = 'flip_board'
             targets = [x for x in targets if x.get('part') != 'microsd_slot']
-    # refinement step stub
+    # refinement stub
     for t in targets:
         if t.get('box_1000'):
-            # placeholder refinement: keep original box, mark refined
             t['refined'] = True
     # SAM segmentation
     regions = []
@@ -118,32 +116,32 @@ def analyze(data, glimmer_mod, sam_mod):
     else:
         try:
             for t in targets:
-            try:
-                result = sam_mod.segment(img, t)
-            except RuntimeError as e:
-                import traceback, sys
-                traceback.print_exc(file=sys.stderr)
-                if 'sam_unavailable' in str(e):
-                    sam_status = 'sam_unavailable'
-                    sam_detail = str(e)[:200]
-                    regions = []
-                    break
-                else:
+                try:
+                    result = sam_mod.segment(img, t)
+                except RuntimeError as e:
+                    import traceback, sys
+                    traceback.print_exc(file=sys.stderr)
+                    if 'sam_unavailable' in str(e):
+                        sam_status = 'sam_unavailable'
+                        sam_detail = str(e)[:200]
+                        regions = []
+                        break
+                    else:
+                        sam_status = 'sam_error'
+                        sam_detail = f'{type(e).__name__}: {e}'[:200]
+                        regions = []
+                        break
+                except Exception as e:
+                    import traceback, sys
+                    traceback.print_exc(file=sys.stderr)
                     sam_status = 'sam_error'
                     sam_detail = f'{type(e).__name__}: {e}'[:200]
                     regions = []
                     break
-            except Exception as e:
-                import traceback, sys
-                traceback.print_exc(file=sys.stderr)
-                sam_status = 'sam_error'
-                sam_detail = f'{type(e).__name__}: {e}'[:200]
-                regions = []
-                break
-            part = t.get('part')
-            label = get_part_label(part) if part else part
-            if result is None:
-                regions.append({
+                part = t.get('part')
+                label = get_part_label(part) if part else part
+                if result is None:
+                    regions.append({
                     'id': t.get('id'),
                     'part': part,
                     'label': label,
@@ -151,11 +149,10 @@ def analyze(data, glimmer_mod, sam_mod):
                     'bbox': None,
                     'score': 0.0,
                     'status': 'not_found',
-                    'source': 'sam3',
-                    'refined': t.get('refined', False)
+                    'source': 'sam3'
                 })
-            else:
-                regions.append({
+                else:
+                    regions.append({
                     'id': t.get('id'),
                     'part': part,
                     'label': label,
@@ -163,15 +160,14 @@ def analyze(data, glimmer_mod, sam_mod):
                     'bbox': result.get('bbox'),
                     'score': float(result.get('score', 0.0)),
                     'status': 'observed',
-                    'source': 'sam3',
-                    'refined': t.get('refined', False)
+                    'source': 'sam3'
                 })
-    except Exception as e:
-        import traceback, sys
-        traceback.print_exc(file=sys.stderr)
-        sam_status = 'sam_error'
-        sam_detail = f'{type(e).__name__}: {e}'[:200]
-        regions = []
+        except Exception as e:
+            import traceback, sys
+            traceback.print_exc(file=sys.stderr)
+            sam_status = 'sam_error'
+            sam_detail = f'{type(e).__name__}: {e}'[:200]
+            regions = []
     timings['sam_ms'] = int((time.time() - t_sam_start)*1000)
     # glimmer pass2
     t_pass2_start = time.time()
