@@ -87,7 +87,7 @@ def pass1(image_data_url, question, reference_text):
         raise GlimmerError('glimmer_unreachable')
 
 def pass2(image_data_url, view, regions, question, reference_text):
-    system_prompt = 'Explain in 2-3 sentences using the found region labels. Never output coordinates or boxes.'
+    system_prompt = 'Explain in 2 sentences using the found region labels. Never output coordinates or boxes.'
     # Build region labels list
     region_descs = []
     for r in regions:
@@ -102,7 +102,7 @@ def pass2(image_data_url, view, regions, question, reference_text):
         {'role':'system','content': system_prompt},
         {'role':'user','content': user_content}
     ]
-    resp = _post_chat(messages, timeout=120, max_tokens=600)
+    resp = _post_chat(messages, timeout=120, max_tokens=300)
     content = _extract_content(resp)
     if content is None:
         raise GlimmerError('glimmer_truncated')

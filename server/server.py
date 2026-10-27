@@ -6,6 +6,18 @@ MAX_QUESTION = 500
 
 lock = threading.Lock()
 
+sam_state = {'status':'loading'}
+
+def _preload_sam():
+    try:
+        import sam
+        sam._load()
+        sam_state['status'] = 'ready'
+    except Exception:
+        sam_state['status'] = 'unavailable'
+
+threading.Thread(target=_preload_sam, daemon=True).start()
+
 class GlimmerError(Exception):
     def __init__(self, code):
         self.code = code
@@ -54,6 +66,8 @@ def analyze(data, glimmer_mod, sam_mod):
     # reference text
     from reference import get_reference_text, get_part_side, get_part_label
     ref_text = get_reference_text()
+    # augment with image size and visual descriptions
+    ref_text = f"Image size: {img.width} x {img.height} pixels\n{ref_text}"
     timings = {}
     timings['decode_ms'] = int((time.time() - t_decode_start)*1000)
     t0 = time.time()
@@ -74,19 +88,36 @@ def analyze(data, glimmer_mod, sam_mod):
     if needs_view not in (None, 'flip_board', 'closer'):
         needs_view = None
     targets = p1.get('targets',[])
+    # enforce microSD flip rule
+    q_lower = question.lower()
+    microsd_mentioned = any(k in q_lower for k in ['microsd','micro sd','sd card','memory card','storage card'])
+    has_microsd_target = any(t.get('part') == 'microsd_slot' for t in targets)
+    if (microsd_mentioned or has_microsd_target) and get_part_side('microsd_slot') == 'underside':
+        view = p1.get('view')
+        if view == 'top' or view is None:
+            needs_view = 'flip_board'
+            targets = [x for x in targets if x.get('part') != 'microsd_slot']
+    # refinement step stub
     for t in targets:
-        if t.get('part') == 'microsd_slot' and get_part_side('microsd_slot') == 'underside':
-            if p1.get('view') == 'top' or p1.get('view') is None:
-                needs_view = 'flip_board'
-                targets = [x for x in targets if x.get('part') != 'microsd_slot']
-                break
+        if t.get('box_1000'):
+            # placeholder refinement: keep original box, mark refined
+            t['refined'] = True
     # SAM segmentation
     regions = []
     sam_status = None
     sam_detail = None
     t_sam_start = time.time()
-    try:
-        for t in targets:
+    # wait for SAM preload
+    if sam_state['status'] == 'loading':
+        wait_start = time.time()
+        while sam_state['status'] == 'loading' and time.time() - wait_start < 5:
+            time.sleep(0.05)
+    if sam_state['status'] == 'unavailable':
+        sam_status = 'sam_unavailable'
+        sam_detail = 'SAM preload failed'
+    else:
+        try:
+            for t in targets:
             try:
                 result = sam_mod.segment(img, t)
             except RuntimeError as e:
@@ -120,7 +151,8 @@ def analyze(data, glimmer_mod, sam_mod):
                     'bbox': None,
                     'score': 0.0,
                     'status': 'not_found',
-                    'source': 'sam3'
+                    'source': 'sam3',
+                    'refined': t.get('refined', False)
                 })
             else:
                 regions.append({
@@ -131,7 +163,8 @@ def analyze(data, glimmer_mod, sam_mod):
                     'bbox': result.get('bbox'),
                     'score': float(result.get('score', 0.0)),
                     'status': 'observed',
-                    'source': 'sam3'
+                    'source': 'sam3',
+                    'refined': t.get('refined', False)
                 })
     except Exception as e:
         import traceback, sys
@@ -175,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(obj).encode())
     def do_GET(self):
         if self.path == '/api/health':
-            self._json(200, {'status':'ok'})
+            self._json(200, {'status':'ok','sam': sam_state['status']})
         else:
             self.send_error(404)
     def do_POST(self):

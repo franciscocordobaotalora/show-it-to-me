@@ -51,8 +51,11 @@ async function startCamera(){
     video.srcObject = stream;
     setStatus('Camera ready');
   }catch(e){
-    setStatus('Camera unavailable – use upload');
-    video.hidden = true;
+    // Do not overwrite a newer user status
+    if(!currentFrame && statusEl.textContent === 'Ready'){
+      setStatus('Camera unavailable – use upload');
+      video.hidden = true;
+    }
   }
 }
 
@@ -218,6 +221,7 @@ function drawRegions(regions, frame){
     ctx.font = 'bold 16px sans-serif';
     ctx.fillText('DEMO', 12, 24);
   }
+  canvas.dataset.drawn = Date.now();
 }
 
 function renderAnswer(data){
