@@ -20,14 +20,26 @@ Muse through Pi is the implementation worker. Codex reviews. SAM is a perception
 
 Intended runtime: BF16 Muse Glimmer 30B via authenticated vLLM server with tool roundtrip.
 
-## Current status
+## Access (31 October 2026)
+
+The [protected test app](https://show-it-to-me.experiment.franciscocordobaotalora.com/)
+now uses our earlier voice app's shared login. If signed out, sign in with the existing our earlier voice app
+account and 2-step; the login returns to this app. The former Basic Auth credentials
+no longer grant access. an earlier voice project's host-only cookie is separate from this shared
+experiment-domain session. Deployment configuration and checks are maintained in the
+parent workspace's `operator/TEST-DEPLOYMENT.md`.
+
+At the latest check, SAM3 was ready but Glimmer was stopped. A leased GPU-B window
+and a verified model response are required before testing image answers.
+
+## Current status (October 27 build, historical test results)
 
 - BF16 Muse Glimmer 30B downloaded
 - Small text/vision smoke passed
 - Authenticated vLLM server and tool roundtrip tested
 - SAM3 environment imports present; SAM auth resolved, weights accessible
 - Phone-camera shell implemented with upload/retake/question flow, overlay renderer, frame/request contracts, stale-response protection
-- T01 public browser suite passes 8 tests; protected test URL https://show-it-to-me.experiment.franciscocordobaotalora.com/ (HTTP Basic auth)
+- T01 public browser suite passes 8 tests; protected test URL https://show-it-to-me.experiment.franciscocordobaotalora.com/ (our earlier voice app session login since October 31)
 - T03H numbered candidate selection live, T03I speed fixes applied, T03J quality gate and docs updated
 - Real Muse+SAM end-to-end works, 20-50s per request
 
