@@ -203,6 +203,24 @@ Prices: Meta ASR $0.18/audio hour; engine TTS internal.
 
 Atlas project dir: `/data/project` on the Atlas box. Secrets file for backend choice: `secrets/backend` (contains `baseten` to use Baseten, otherwise Glimmer). Model provenance revision `cec94fcfd6512f2cfe708138c32533b346ea4f69`, runtime vLLM 0.30.0. Prior nginx config backup is `operator/show-it-to-me-test.vhost.bak-20261031`, live config is `operator/show-it-to-me-test.nginx.conf`.
 
+## What it cost in tokens
+
+We built this with an AI coding agent (Muse Spark Open, served by Baseten) and the Baseten hackathon credit of $100 paid for all of it. It ran out on 2026-11-01 (the API now answers HTTP 402, payment status). These numbers come from the agent's own session logs (1,516 model calls) and Baseten's listed prices ($1.25 per million input tokens, $4.25 per million output tokens, $0.15 per million cached input tokens; the prices come from third-party price sites, not from Baseten's page, and the real balance is only visible in the Baseten dashboard).
+
+| | Tokens | Cost |
+|---|---|---|
+| Input (the agent re-reading its conversation and the files) | 76.1 million | about $95 |
+| Cached input | 18.4 million | about $3 |
+| Output (the code and text it wrote) | 0.8 million | about $3 |
+| Total | | about $101 |
+
+The photo and voice requests of the app itself (73 analyses in the logs) were small next to this. What we learned:
+
+* 94 percent of the spend was the agent reading, not writing. Every step of the agent sends the whole conversation again, and a long ticket takes 100 to 180 steps of about 50,000 tokens each, so one ticket cost between $6 and $12.
+* The most expensive tickets were the first design build ($12), the drawing repair ($12.5) and the voice mode ($11).
+* What would have cut it by more than half: a fresh conversation for every ticket, reading only the lines needed instead of whole files, and a spend cap that stops the agent and sends a message at a fixed amount.
+* While the credit was gone, the live site answered with Meta Model API's `muse-spark-1.3` (a Meta hosted model) so people could keep testing. The open-weight Muse models are the ones that count for the prize; see "Models" above.
+
 ## Built locally, served with hosted keys
 
 We developed and measured everything locally on our own hardware (a local SAM 3 on a GPU, the local Muse Glimmer test bench, our own benchmarks and numbers). The live site serves it with hosted keys: Muse Spark Open on Baseten, and the Meta Model API for speech to text (Muse Voice Transcribe) and soon SAM 3.1. No key appears in the repo.
