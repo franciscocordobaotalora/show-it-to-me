@@ -185,6 +185,60 @@ def pass2(image_data_url, view, regions, question, reference_text):
         raise GlimmerError('glimmer_truncated')
     return content
 
+def scan(image_data_url):
+    """One Muse vision call to list 3-8 salient objects with boxes + caption."""
+    system_prompt = (
+        'You are a visual scanner. List the 3 to 8 most salient distinct things in the photo. '
+        'Return strict JSON {"caption": string (one sentence describing the scene), '
+        '"objects": [{"label": string (2-4 words human readable), "sam_prompt": string (short noun phrase for segmentation, e.g. "mug", "white connector"), "box_1000": [x1,y1,x2,y2] in 0..1000}]}. '
+        'Choose diverse, clearly visible objects. No duplicates. Boxes must tightly enclose each object.'
+    )
+    messages = [
+        {'role':'system','content': system_prompt},
+        {'role':'user','content':[
+            {'type':'image_url','image_url':{'url': image_data_url}},
+            {'type':'text','text': 'Scan this image: list salient objects with boxes and a short caption.'}
+        ]}
+    ]
+    try:
+        resp = _post_chat(messages, timeout=60, max_tokens=900)
+        content = _extract_content(resp)
+        if content is None:
+            raise GlimmerError('glimmer_truncated')
+        return json.loads(content)
+    except GlimmerError:
+        raise
+    except json.JSONDecodeError:
+        raise GlimmerError('glimmer_bad_json')
+    except TimeoutError:
+        raise GlimmerError('glimmer_timeout')
+    except Exception:
+        raise GlimmerError('glimmer_unreachable')
+
+def scan_answer(objects, caption, question):
+    """TEXT-ONLY Muse call (no image). Given objects [labels,boxes] and caption, answer question and say which objects."""
+    objs_text = '; '.join([f"{o.get('label')} at {o.get('box_1000')}" for o in objects]) if objects else 'none'
+    system_prompt = 'You are a helpful visual guide. Given these objects and the scene caption, answer the question. Return strict JSON {"answer": string (2-3 sentences in same language as question), "selected": [string labels of relevant objects from the list]}. Only use labels that appear exactly in the provided list.'
+    user_text = f"Caption: {caption}\nObjects: {objs_text}\nQuestion: {question}\nReturn JSON with answer and selected labels."
+    messages = [
+        {'role':'system','content': system_prompt},
+        {'role':'user','content': [{'type':'text','text': user_text}]}
+    ]
+    try:
+        resp = _post_chat(messages, timeout=60, max_tokens=400)
+        content = _extract_content(resp)
+        if content is None:
+            raise GlimmerError('glimmer_truncated')
+        return json.loads(content)
+    except GlimmerError:
+        raise
+    except json.JSONDecodeError:
+        raise GlimmerError('glimmer_bad_json')
+    except TimeoutError:
+        raise GlimmerError('glimmer_timeout')
+    except Exception as e:
+        raise GlimmerError('glimmer_unreachable')
+
 def pick_candidate(image_pil, description, n):
     import io, base64, re
     buf = io.BytesIO()

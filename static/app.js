@@ -62,6 +62,21 @@ let livePreRollBuffer = null; // ring buffer of last 400ms (4 blocks @100ms)
 let liveLatency = {};
 let livePausedForPlayback = false;
 let liveAudioUnlocked = false;
+// T11 scan-ahead state
+const scanReadyDot = document.getElementById('scanReadyDot');
+let scanLatestId = null;
+let scanLatestTs = 0;
+let scanInFlight = false;
+let scanLastTime = 0;
+let scanTick = null;
+let scanPrevGray = null;
+let scanLastMotion = 0;
+let scanHasMoved = false;
+let scanSpeechId = null;
+const SCAN_THRESHOLD = 0.08;
+const SCAN_INTERVAL_MS = 3000;
+const SCAN_TICK_MS = 500;
+const SCAN_STABLE_MS = 600;
 
 // iOS API guards: check availability with fallbacks (an earlier voice project pattern)
 function safeAt(arr, idx){ try{ if(Array.prototype.at) return arr.at(idx); }catch(e){} return arr[idx<0?arr.length+idx:idx]; }
@@ -147,6 +162,87 @@ function livePlayPCM(pcmBytes){
   src.start(liveNextTime); liveNextTime+=buf.duration; liveSources.add(src); src.onended=()=> liveSources.delete(src);
 }
 function liveFlush(){ liveSources.forEach(s=>{ try{ s.stop(); }catch(e){} }); liveSources.clear(); liveNextTime=0; }
+// T11 scan helpers
+function captureGrayscale32(){
+  try{
+    if(!video || video.hidden || !video.videoWidth) return null;
+    const c=document.createElement('canvas'); c.width=32; c.height=32;
+    const ct=c.getContext('2d');
+    ct.drawImage(video,0,0,32,32);
+    const d=ct.getImageData(0,0,32,32).data;
+    const gray=new Array(1024);
+    for(let i=0;i<1024;i++){ const r=d[i*4],g=d[i*4+1],b=d[i*4+2]; gray[i]=Math.round(0.299*r+0.587*g+0.114*b); }
+    return gray;
+  }catch(e){ return null; }
+}
+function frameDifference(a,b){
+  if(!a||!b||a.length!==b.length) return 1.0;
+  let s=0; for(let i=0;i<a.length;i++) s+=Math.abs(a[i]-b[i]);
+  return (s/a.length)/255.0;
+}
+function updateReadyDot(){
+  if(!scanReadyDot) return;
+  const fresh = scanLatestId && (Date.now()-scanLatestTs) < 60000;
+  scanReadyDot.hidden = !fresh;
+}
+async function doScan(){
+  if(scanInFlight) return;
+  if(document.hidden) return;
+  if(!liveEnabled) return;
+  const now=Date.now();
+  if(now - scanLastTime < SCAN_INTERVAL_MS) return;
+  let frame=null;
+  try{ frame=await captureLiveFrame(); }catch(e){ return; }
+  if(!frame||!frame.dataUrl) return;
+  const scanId = (()=>{ try{ return crypto.randomUUID(); }catch(e){ return 's'+Math.random().toString(16).slice(2); } })();
+  scanInFlight=true; scanLastTime=now;
+  try{
+    const resp=await fetch('/api/scan',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({scanId, image: frame.dataUrl})});
+    if(resp.ok){
+      const data=await resp.json();
+      scanLatestId = data.scanId || scanId;
+      scanLatestTs = Date.now();
+      updateReadyDot();
+      sendClientEvent('scan_ok', scanLatestId+' '+ (data.objects?.length||0));
+    } else {
+      sendClientEvent('scan_fail', String(resp.status));
+    }
+  }catch(e){ sendClientEvent('scan_fail','network'); } finally{ scanInFlight=false; }
+}
+function startScanLoop(){
+  stopScanLoop();
+  scanPrevGray=null; scanHasMoved=false; scanLastMotion=0;
+  // immediate scan on Live start (a)
+  setTimeout(()=>{ if(liveEnabled && !document.hidden) doScan(); }, 600);
+  scanTick=setInterval(()=>{
+    if(!liveEnabled || document.hidden || scanInFlight) return;
+    const cur=captureGrayscale32();
+    if(!cur) return;
+    if(!scanPrevGray){ scanPrevGray=cur; return; }
+    const diff=frameDifference(scanPrevGray, cur);
+    scanPrevGray=cur;
+    const now=Date.now();
+    if(diff > SCAN_THRESHOLD){
+      scanHasMoved=true; scanLastMotion=now;
+    } else {
+      if(scanHasMoved && (now - scanLastMotion) >= SCAN_STABLE_MS){
+        // picture stable after movement (b)
+        if((now - scanLastTime) >= SCAN_INTERVAL_MS){
+          doScan();
+          scanHasMoved=false;
+        }
+      }
+    }
+  }, SCAN_TICK_MS);
+}
+function stopScanLoop(){
+  if(scanTick){ clearInterval(scanTick); scanTick=null; }
+  scanPrevGray=null; scanHasMoved=false;
+  // keep scanLatestId for reuse within TTL but hide dot if stopped?
+  // dot stays if fresh; spec says stop scanning when Live off or tab hidden
+  if(!liveEnabled && scanReadyDot) scanReadyDot.hidden=true;
+}
+
 function liveFallbackTTS(text){
   try{
     if(!window.speechSynthesis) return;
@@ -672,10 +768,13 @@ async function ask(){
   sendClientEvent('ask_sent', q);
   showLoading(stages[0]);
   try{
+    const payload={frameId, requestId, question:q, image:captured.dataUrl};
+    if(liveEnabled && scanLatestId && (Date.now()-scanLatestTs)<60000) payload.scanId=scanLatestId;
+    else if(!liveEnabled && scanLatestId && (Date.now()-scanLatestTs)<60000 && scanSpeechId) payload.scanId=scanLatestId;
     const resp=await fetch('/api/analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({frameId, requestId, question:q, image:captured.dataUrl}),
+      body: JSON.stringify(payload),
       signal: abortController.signal
     });
     if(!resp.ok){
@@ -853,7 +952,7 @@ async function startLive(){
     }catch(e2){}
     await connectLiveOutput();
     try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
-    return;
+    startScanLoop(); return;
   }
   await connectLiveOutput();
   const srcNode=liveCtx.createMediaStreamSource(liveStream);
@@ -871,9 +970,10 @@ async function startLive(){
   // offline handling
   window.addEventListener('offline', ()=>{ if(liveEnabled) setLiveState('Offline — check connection'); });
   window.addEventListener('online', ()=>{ if(liveEnabled) setLiveState('Listening'); });
+  startScanLoop();
 }
 function stopLive(){
-  liveEnabled=false;
+  liveEnabled=false; stopScanLoop();
   if(liveToggle) liveToggle.classList.remove('active');
   if(liveBar) liveBar.hidden=true;
   if(stopBtn) stopBtn.hidden=true;
@@ -908,11 +1008,11 @@ function handleLiveBlock(int16){
       if(livePreRollBuffer) livePreRollBuffer.clear();
       liveLatency.speech_start=Date.now(); sendClientEvent('speech_start','');
       setLiveState('Hearing you');
+      // T11: capture scanId at speech START
+      scanSpeechId = scanLatestId && (Date.now()-scanLatestTs)<60000 ? scanLatestId : null;
       // capture frame at speech START
       captureLiveFrame().then(c=>{
         liveSpeechStartFrame=c;
-        // store frame for later analyze: we need to freeze it to get canvas size correct
-        // but don't freeze UI yet; just keep dataUrl
       }).catch(()=>{ liveSpeechStartFrame=null; });
     }
   } else {
@@ -991,7 +1091,9 @@ async function runLiveAnalyze(captured, question){
     speakTextLive('One moment', true);
   },3000);
   try{
-    const resp=await fetch('/api/analyze',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({frameId, requestId, question, image:captured.dataUrl})});
+    const payload={frameId, requestId, question, image:captured.dataUrl};
+    if(scanSpeechId) payload.scanId=scanSpeechId;
+    const resp=await fetch('/api/analyze',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     clearTimeout(sayMomentTimer);
     if(!resp.ok){ setStatus('Could not analyze — try again'); setLiveState('Listening'); return; }
     const data=await resp.json();
@@ -1109,8 +1211,8 @@ window.onresize=()=>{ syncOverlaySize(); updateAskEnabled(); };
 window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{ syncOverlaySize(); updateAskEnabled(); }, 300); });
 // visibilitychange: stop tracks when hidden, restart when visible (our earlier voice app pattern)
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState==='visible'){ if(!currentStream && !isFrozen){ startCamera(currentFacing); } try{ if(video && video.paused && currentStream) video.play(); }catch(e){} requestWakeLock(); }
-  else { try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} audioSession('auto'); }
+  if(document.visibilityState==='visible'){ if(!currentStream && !isFrozen){ startCamera(currentFacing); } try{ if(video && video.paused && currentStream) video.play(); }catch(e){} requestWakeLock(); if(liveEnabled && !scanTick) startScanLoop(); }
+  else { try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} audioSession('auto'); if(scanTick) stopScanLoop(); }
 });
 window.addEventListener('pagehide', ()=>{ try{ if(currentStream) currentStream.getTracks().forEach(t=>t.stop()); }catch(e){} releaseWakeLock(); });
 // visualViewport keyboard handling: keep question input above keyboard (an earlier voice project ~617)
@@ -1156,4 +1258,4 @@ setStatus=function(msg){
 })();
 
 // expose for tests ?
-window.__app={ startCamera, captureLiveFrame, ask, resetToLive, get state(){ return {isFrozen, asking, currentStream, currentFacing, currentFrame}; } };
+window.__app={ startCamera, captureLiveFrame, ask, resetToLive, frameDifference, captureGrayscale32, get state(){ return {isFrozen, asking, currentStream, currentFacing, currentFrame, scanLatestId, scanInFlight}; } };

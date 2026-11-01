@@ -173,6 +173,76 @@ sam_state = {'status':'ready'}
 _client_event_times = []
 _client_event_lock = threading.Lock()
 
+# T11 scan-ahead cache and helpers
+from collections import OrderedDict as _OrderedDict
+SCAN_TTL = 60
+SCAN_MAX = 8
+SCAN_RATE_LIMIT = 20  # per minute
+SCAN_MIN_INTERVAL = 3  # seconds frontend, server also uses rate limit
+_scan_cache = _OrderedDict()
+_scan_cache_lock = threading.Lock()
+_scan_times = []  # timestamps for rate limiting
+_scan_lock = threading.Lock()
+
+def _scan_cache_get(scanId):
+    with _scan_cache_lock:
+        entry = _scan_cache.get(scanId)
+        if not entry:
+            return None
+        if time.time() - entry['ts'] > SCAN_TTL:
+            try: del _scan_cache[scanId]
+            except: pass
+            return None
+        # move to end for LRU
+        _scan_cache.move_to_end(scanId)
+        return entry['data']
+
+def _scan_cache_set(scanId, data):
+    with _scan_cache_lock:
+        _scan_cache[scanId] = {'ts': time.time(), 'data': data}
+        _scan_cache.move_to_end(scanId)
+        while len(_scan_cache) > SCAN_MAX:
+            _scan_cache.popitem(last=False)
+
+def _scan_cache_cleanup():
+    now = time.time()
+    with _scan_cache_lock:
+        stale = [k for k,v in _scan_cache.items() if now - v['ts'] > SCAN_TTL]
+        for k in stale:
+            _scan_cache.pop(k, None)
+
+def _scan_check_rate_limit(now=None):
+    if now is None:
+        now = time.time()
+    with _scan_lock:
+        global _scan_times
+        _scan_times = [t for t in _scan_times if now - t < 60]
+        if len(_scan_times) >= SCAN_RATE_LIMIT:
+            return False
+        _scan_times.append(now)
+        return True
+
+def frame_diff(a, b):
+    """Compare two 32x32 grayscale frames (list/array of 1024 values 0..255). Returns mean absolute diff normalized 0..1."""
+    if a is None or b is None:
+        return 1.0
+    try:
+        if len(a) != len(b):
+            return 1.0
+        n = len(a)
+        if n == 0:
+            return 0.0
+        s = 0.0
+        for i in range(n):
+            s += abs(float(a[i]) - float(b[i]))
+        return (s / n) / 255.0
+    except Exception:
+        return 1.0
+
+# expose for tests
+SCAN_FRAME_THRESHOLD = 0.08  # 8% mean pixel diff considered movement
+
+
 def _preload_sam():
     start = time.time()
     eventlog.log_event('sam_preload', level='info', stage='start')
@@ -193,18 +263,220 @@ class GlimmerError(Exception):
         self.code = code
         super().__init__(code)
 
+def handle_scan_request(data, glimmer_mod, sam_mod):
+    scanId = data.get('scanId')
+    image = data.get('image')
+    if not isinstance(scanId, str) or not scanId or len(scanId) > 64:
+        return 400, {'error':'invalid_scanId'}
+    if not isinstance(image, str) or not re.match(r'^data:image/(jpeg|png);base64,', image):
+        return 400, {'error':'invalid_image'}
+    try:
+        b64 = image.split(',',1)[1]
+        img_bytes = base64.b64decode(b64, validate=True)
+    except Exception:
+        return 400, {'error':'invalid_image'}
+    if len(img_bytes) > MAX_SIZE:
+        return 400, {'error':'image_too_large'}
+    # rate limit
+    if not _scan_check_rate_limit():
+        return 429, {'error':'too_many_requests'}
+    # check cache hit (still valid)
+    cached = _scan_cache_get(scanId)
+    if cached:
+        return 200, cached
+    t0 = time.time()
+    # decode and prepare image for models
+    try:
+        from PIL import Image, ImageOps
+        img = Image.open(io.BytesIO(img_bytes))
+        img.verify()
+        img = Image.open(io.BytesIO(img_bytes))
+        img = ImageOps.exif_transpose(img)
+        max_side = 1280
+        w,h = img.size
+        if max(w,h) > max_side:
+            scale = max_side / max(w,h)
+            img = img.resize((int(w*scale), int(h*scale)))
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG')
+        data_url = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+        pil_for_sam = img.convert('RGB')
+    except Exception:
+        return 400, {'error':'corrupt_image'}
+    # ONE Muse call
+    try:
+        t_g = time.time()
+        scan_raw = glimmer_mod.scan(data_url)
+        glimmer_ms = int((time.time()-t_g)*1000)
+    except GlimmerError as e:
+        if e.code == 'glimmer_timeout':
+            return 504, {'error':'glimmer_timeout'}
+        if e.code == 'glimmer_bad_json':
+            return 502, {'error':'glimmer_bad_json'}
+        return 502, {'error':'glimmer_unreachable'}
+    except Exception:
+        return 502, {'error':'glimmer_unreachable'}
+    caption = scan_raw.get('caption','') or scan_raw.get('caption_en','') or ''
+    objects_raw = scan_raw.get('objects', []) or scan_raw.get('targets', [])
+    # normalize and limit 3-8
+    objects_norm = []
+    for o in objects_raw[:8]:
+        label = o.get('label') or o.get('sam_prompt') or o.get('id') or 'object'
+        sam_prompt = o.get('sam_prompt') or label
+        box = o.get('box_1000') or o.get('box')
+        if not box or not isinstance(box, list) or len(box)!=4:
+            continue
+        try:
+            box = [max(0,min(1000,float(v))) for v in box]
+            if not (box[2] > box[0] and box[3] > box[1]):
+                continue
+        except Exception:
+            continue
+        objects_norm.append({'label': str(label)[:40], 'sam_prompt': str(sam_prompt)[:60], 'box_1000': box})
+    if len(objects_norm) < 3:
+        # if model returned <3, keep what we have (allow 1-2 but ticket says 3-8)
+        pass
+    # SAM batch masks
+    t_sam = time.time()
+    objects_out = []
+    for o in objects_norm:
+        target = {'id': o['label'], 'label': o['label'], 'part': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000']}
+        try:
+            result = sam_mod.segment(pil_for_sam, target)
+            # segment may return dict with polygon,bbox,score or list
+            cand = None
+            if isinstance(result, dict):
+                cand = result
+            elif isinstance(result, list) and len(result)>0:
+                cand = result[0] if isinstance(result[0], dict) else None
+            else:
+                cand = None
+            if cand and cand.get('polygon') and cand.get('bbox'):
+                poly = cand.get('polygon')
+                bbox = cand.get('bbox')
+                score = float(cand.get('score', 0.5))
+                # quality gate: skip huge masks >85%
+                if bbox:
+                    area = max(0.0,bbox[2]-bbox[0])*max(0.0,bbox[3]-bbox[1])
+                    if area > 0.85:
+                        # fallback to box polygon
+                        bx = o['box_1000']
+                        bbox_fb = [bx[0]/1000.0, bx[1]/1000.0, bx[2]/1000.0, bx[3]/1000.0]
+                        poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
+                        objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0})
+                        continue
+                objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly, 'bbox': bbox, 'score': score})
+            else:
+                # fallback to box polygon
+                bx = o['box_1000']
+                bbox_fb = [bx[0]/1000.0, bx[1]/1000.0, bx[2]/1000.0, bx[3]/1000.0]
+                poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
+                objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0})
+        except Exception:
+            # fallback box
+            bx = o['box_1000']
+            bbox_fb = [bx[0]/1000.0, bx[1]/1000.0, bx[2]/1000.0, bx[3]/1000.0]
+            poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
+            objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0})
+    sam_ms = int((time.time()-t_sam)*1000)
+    total_ms = int((time.time()-t0)*1000)
+    resp = {'scanId': scanId, 'objects': objects_out, 'caption': caption}
+    _scan_cache_set(scanId, resp)
+    eventlog.log_event('scan_ok', level='info', scanId=scanId, ms=total_ms, glimmer_ms=glimmer_ms, sam_ms=sam_ms, object_count=len(objects_out))
+    return 200, resp
+
 def analyze(data, glimmer_mod, sam_mod):
     # validation
     frameId = data.get('frameId')
     requestId = data.get('requestId')
     question = data.get('question','')
     image = data.get('image')
+    scanId = data.get('scanId')
     if not isinstance(frameId,str) or not frameId or len(frameId)>64:
         return 400, {'error':'invalid_frameId'}
     if not isinstance(requestId,str) or not requestId or len(requestId)>64:
         return 400, {'error':'invalid_requestId'}
     if not isinstance(question,str) or not (1 <= len(question) <= MAX_QUESTION):
         return 400, {'error':'invalid_question'}
+    # T11 scan fast path: if scanId present and cached, try text-only call
+    if isinstance(scanId, str) and scanId:
+        _scan_cache_cleanup()
+        cached = _scan_cache_get(scanId)
+        if cached:
+            t_scan_start = time.time()
+            objects_cached = cached.get('objects', [])
+            caption_cached = cached.get('caption','')
+            try:
+                scan_ans = glimmer_mod.scan_answer(objects_cached, caption_cached, question)
+                selected = scan_ans.get('selected') or scan_ans.get('selected_labels') or scan_ans.get('labels') or []
+                # normalize selected to list of strings
+                if isinstance(selected, str):
+                    selected = [selected]
+                if not isinstance(selected, list):
+                    selected = []
+                # validate selected labels exist in cache
+                label_set = {o.get('label') for o in objects_cached}
+                # check if at least one selected label matches (case-insensitive fallback check)
+                matched = []
+                for sel in selected:
+                    if not isinstance(sel, str):
+                        continue
+                    # exact match first
+                    found = None
+                    for o in objects_cached:
+                        if o.get('label') == sel:
+                            found = o
+                            break
+                    if not found:
+                        # case-insensitive try
+                        for o in objects_cached:
+                            if o.get('label','').lower() == sel.lower():
+                                found = o
+                                break
+                    if found:
+                        matched.append(found)
+                    else:
+                        matched = None
+                        break
+                if matched is not None and len(matched)>0:
+                    # build regions from cached polygons
+                    regions = []
+                    for o in matched:
+                        regions.append({
+                            'id': o.get('label'),
+                            'part': o.get('label'),
+                            'label': o.get('label'),
+                            'polygon': o.get('polygon'),
+                            'bbox': o.get('bbox'),
+                            'score': float(o.get('score',0.0)),
+                            'status': 'observed',
+                            'source': 'sam3',
+                            'selection': 'scan'
+                        })
+                    answer = scan_ans.get('answer') or scan_ans.get('explanation') or ''
+                    scan_ms = int((time.time()-t_scan_start)*1000)
+                    timings = {'decode_ms':0, 'scan_ms':scan_ms, 'sam_ms':0, 'total_ms': scan_ms}
+                    provenance = {'model': os.getenv('MUSE_MODEL','unknown'), 'path': 'scan', 'scanId': scanId, 'timings': timings, 'sam_model': 'sam3'}
+                    resp = {
+                        'frameId': frameId,
+                        'requestId': requestId,
+                        'view': 'unknown',
+                        'regions': regions,
+                        'explanation': answer,
+                        'needs_view': None,
+                        'sources': [],
+                        'provenance': provenance,
+                        'path': 'scan'
+                    }
+                    eventlog.log_event('scan_answer_ok', requestId=requestId, frameId=frameId, scanId=scanId, ms=scan_ms, selected=len(matched))
+                    return 200, resp
+                else:
+                    eventlog.log_event('scan_fallback', requestId=requestId, frameId=frameId, scanId=scanId, reason='label_missing')
+            except GlimmerError as e:
+                eventlog.log_event('scan_fallback', requestId=requestId, frameId=frameId, scanId=scanId, reason='glimmer_'+e.code)
+            except Exception as e:
+                eventlog.log_event('scan_fallback', requestId=requestId, frameId=frameId, scanId=scanId, reason='exception')
+            # fall through to full pipeline
     if not isinstance(image,str) or not re.match(r'^data:image/(jpeg|png);base64,', image):
         return 400, {'error':'invalid_image'}
     try:
@@ -591,7 +863,7 @@ def analyze(data, glimmer_mod, sam_mod):
         {'name':'sam','ms':timings.get('sam_ms')},
         {'name':'total','ms':timings.get('total_ms')}
     ]
-    provenance = {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings,'steps':steps}
+    provenance = {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings,'steps':steps, 'path':'full'}
     if sam_detail:
         provenance['sam_detail'] = sam_detail
     resp = {
@@ -602,7 +874,8 @@ def analyze(data, glimmer_mod, sam_mod):
         'explanation': explanation,
         'needs_view': needs_view,
         'sources': [],
-        'provenance': provenance
+        'provenance': provenance,
+        'path': 'full'
     }
     eventlog.log_event('final', requestId=requestId, frameId=frameId, status=200, regions_count=len(regions), total_ms=timings.get('total_ms'))
     return 200, resp
@@ -754,6 +1027,39 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json(sc, resp_body)
                     status=sc
+                return
+            if path == '/api/scan':
+                # scan has its own rate limit inside handle_scan_request but also global concurrency? Use lock-like check
+                try:
+                    if 'Content-Length' not in self.headers:
+                        self._json(411, {'error':'length_required'})
+                        status = 411
+                        eventlog.log_event('http_rejection', level='warn', method=method, path=path, status=411, reason='length_required')
+                        return
+                    length = int(self.headers.get('Content-Length',0))
+                    if length > 14*1024*1024:
+                        self._json(413, {'error':'payload_too_large'})
+                        status = 413
+                        eventlog.log_event('http_rejection', level='warn', method=method, path=path, status=413, reason='payload_too_large')
+                        return
+                    body = self.rfile.read(length)
+                    try:
+                        data = json.loads(body)
+                    except:
+                        self._json(400, {'error':'invalid_json'})
+                        status = 400
+                        eventlog.log_event('http_rejection', level='warn', method=method, path=path, status=400, reason='invalid_json')
+                        return
+                    import glimmer, sam
+                    status_code, resp = handle_scan_request(data, glimmer, sam)
+                    self._json(status_code, resp)
+                    status = status_code
+                except Exception:
+                    import traceback, sys
+                    traceback.print_exc(file=sys.stderr)
+                    self._json(500, {'error':'internal'})
+                    status = 500
+                    eventlog.log_event('http_rejection', level='error', method=method, path=path, status=500, reason='internal_exception')
                 return
             if path != '/api/analyze':
                 self.send_error(404)

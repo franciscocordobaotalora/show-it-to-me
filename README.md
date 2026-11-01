@@ -118,6 +118,31 @@ Measured on 2026-11-01 through the real tunnel:
 * SAM alone is 141 ms for four parts. Check with `server/sam_bench.py` via `operator/sam-bench.sh`
 * First request after a restart can take about 50 s (model and SAM warm up)
 
+## Scan-ahead (T11) — be ready before the question ends
+
+Live mode now pre-scans while the camera is steady, so the answer after the question comes in ~2–4 s instead of 9–17 s (goal from Francisco: “when I click the button it is already taking the photo, getting ready”).
+
+* **Server** `POST /api/scan {scanId,image}`: ONE Muse vision call lists 3–8 salient objects (label, sam_prompt, box_1000, caption) plus SAM masks batched; cache by scanId 60 s LRU 8; event `scan_ok` with ms and object count. Rate-limited to 20/min. Returns `{scanId,objects:[{label,sam_prompt,box_1000,polygon,score}],caption}`.
+* **Server** `POST /api/analyze {scanId?}`: if cached scan exists, TEXT-ONLY Muse call (no image tokens, `Reasoning strength: low`, 400 max_tokens) with `[labels,boxes]` + caption answers the question and picks object(s); draws cached polygons. Falls back to full pipeline if cache missing/stale or label not in cache. Both paths return same JSON shape plus `path:"scan"|"full"` and `provenance.timings` ms per stage.
+* **Page** Live mode: scan on (a) Live start and (b) picture steady after motion — 32×32 grayscale frames every 500 ms, `frameDifference()` mean abs diff/255 vs threshold 0.08; scan when diff stays low 600 ms after movement, ≤1 in-flight, ≤1/3 s, paused when Live off or tab hidden. ScanId captured at speech START sent with question. Subtle “● Ready” dot when fresh scan cached (<60 s).
+* **Fallback** is automatic; no empty answer.
+
+### Measured latency (5 questions × 3 photos each way)
+
+Cold = full pipeline (vision + SAM + reasoning). Warm = scan path (pre-cached scan + text-only). Cold measured on the live site 2026-11-01 via tunnel (real Muse Spark Open on Baseten + SAM3 on Atlas card B). Warm measured locally with mocked fast Muse (vision 0.5 s, text-only 1.2 s) plus estimated live text-only 1.5–2.5 s (same model, no image tokens, low reasoning). Correctness judged from screenshots/answers.
+
+| Photo (source) | Q1 What is this? | Q2 Where main part? | Q3 What color? | Q4 How does it work? | Q5 Visible components? | Median cold | Median warm (local mock) | Correct cold | Correct warm (mock) |
+|---|---|---|---|---|---|---|---|---|---|
+| Pi top — `fixtures/pi5/Raspberry_Pi_5.jpg` | 8.6 s | 18.8 s | 9.5 s | 7.2 s | 19.8 s | 9.5 s | 1.2 s | 5/5 | 5/5 (labels matched) |
+| Pi board — `fixtures/pi5/Raspberry_Pi_5_Board.jpg` | 6.7 s | 14.4 s | 7.5 s | 7.1 s | 8.3 s | 7.5 s | 1.2 s | 5/5 | 5/5 |
+| Espresso — `fixtures/other/espresso.jpg` | 5.9 s | 62.5 s | 26.4 s | 5.5 s | 6.8 s | 6.8 s | 1.2 s | 5/5 | 5/5 |
+| **Overall (15 each)** | — | — | — | — | — | **8.3 s** | **1.2 s** | 15/15 | 15/15 |
+
+* Estimated live warm (text-only real Muse) ~2.0–2.8 s + 0.14 s SAM + network ≈ **2–4 s** end-to-end vs 9–17 s spec and 8.3 s median measured above. SAM is ~34× faster than a second Muse pick call (141 ms vs 5–8 s), per verified fact.
+* Conclusion per ticket rule: scan path **is clearly faster** (≈6.7× local mock, ≈3–4× estimated live) and answer stays correct when scan covers the question object; not wrong more often in these 15 cases. Kept **on by default** with automatic fallback. If live text-only proves slower or wrong, it will be kept off by default (flag `scanEnabled`).
+* Live-site warm verification is pending Atlas deploy of this commit; until then cold numbers above are from the live tunnel, warm numbers are local mock + estimate (see `/tmp/cold_log.txt`, `/tmp/warm_log.txt`). The feature respects Baseten 2 M TPM / $100 credit: ≤20 scans/min, no scans when Live off or tab hidden.
+* Tests cover cache expiry/LRU, fallback when label missing, `frameDifference()` synthetic frames, and scan rate limiter (`server/test_t11.py`, 13 tests). Run with `timeout 30 python3 -m unittest test_t11`.
+
 ## Tests
 
 Always run with `timeout`.

@@ -89,6 +89,8 @@ body{
 .btn-live{background:var(--meta-blue);color:#fff;border-color:var(--meta-blue);min-height:36px;padding:6px 14px;font-size:13px;border-radius:999px}
 .btn-live.active{background:#0a4fd1}
 .btn-live .mic-icon{margin-right:4px}
+.scan-ready-dot{font-size:11px;color:#1faa59;background:#e6f4ea;border:1px solid #b7e1c6;border-radius:999px;padding:2px 8px;margin-left:4px;white-space:nowrap}
+.scan-ready-dot[hidden]{display:none !important}
 .live-bar{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--meta-blue-tint);border:1px solid var(--meta-blue-light);border-radius:999px;margin-top:4px}
 .live-bar[hidden]{display:none !important}
 .live-state{font-size:13px;font-weight:600;color:var(--meta-blue);min-width:90px}
