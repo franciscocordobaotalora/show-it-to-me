@@ -152,8 +152,8 @@ function setAppState(next, detail){
   if(!APP_STATES.includes(next)) return;
   const prev = appState;
   appState = next;
-  // also update UI status line - guard vibrate to never throw before user gesture
-  try{ if(typeof navigator.vibrate==='function'){ navigator.vibrate(10); } }catch(e){}
+  // guard vibrate to avoid Chrome intervention before user gesture
+  try{ if(typeof navigator.vibrate==='function' && navigator.userActivation && navigator.userActivation.hasBeenActive){ navigator.vibrate(10); } }catch(e){}
   // dispatch to listeners
   appStateListeners.forEach(fn=>{ try{ fn({state:next, prev, detail}); }catch(e){} });
   try{ document.documentElement.setAttribute('data-app-state', next); }catch(e){}
@@ -174,7 +174,7 @@ function setAppState(next, detail){
       else ind.innerHTML='';
     }
     // heroLiveBtn toggle: blue Live with waveform glyph -> red Stop with square
-    const hero=document.getElementById('heroLiveBtn'); if(hero){ const active=['listening','hearing','thinking','speaking'].includes(next); hero.classList.toggle('active', active); hero.setAttribute('aria-label', active?'Stop live mode':'Start live mode'); const label=hero.querySelector('.live-label'); if(label) label.textContent=active?'Stop':'Live'; const glyph=hero.querySelector('.wave-glyph'); if(glyph) glyph.textContent=active?'■':'〰'; }
+    const hero=document.getElementById('heroLiveBtn'); if(hero){ const active=['listening','hearing','thinking','speaking'].includes(next); hero.classList.toggle('active', active); hero.setAttribute('aria-label', active?'Stop live mode':'Start live mode'); const label=hero.querySelector('.live-label'); if(label) label.textContent=active?'Stop':'Live'; const glyph=document.querySelector('#heroLiveBtn .wave-glyph'); if(glyph){ const liveSvg=glyph.querySelector('.glyph-live'); const stopSvg=glyph.querySelector('.glyph-stop'); if(liveSvg) liveSvg.hidden=active; if(stopSvg) stopSvg.hidden=!active; } }
     const wrap=document.getElementById('cameraWrap'); if(wrap){ if(next!=='idle' && (video && video.videoWidth || preview && !preview.hidden)) wrap.classList.add('has-frame'); }
   }catch(e){}
   // Design B top bar mirror
@@ -818,26 +818,21 @@ function drawToCanvas(targetCtx, targetCanvas, regions, frame){
     const poly=r.polygon; if(!Array.isArray(poly)||poly.length<3) return;
     targetCtx.beginPath(); poly.forEach((pt,i)=>{ const x=Math.max(0, Math.min(w, pt[0]*w)); const y=Math.max(0, Math.min(h, pt[1]*h)); if(i===0) targetCtx.moveTo(x,y); else targetCtx.lineTo(x,y); }); targetCtx.closePath();
     const isFallback = r.status==='fallback_box';
-    // soft glow for B: shadowBlur, for A normal
     const isB = targetCanvas===canvasB;
     if(!isFallback){
-      if(isB){ targetCtx.shadowColor='rgba(255,98,0,0.9)'; targetCtx.shadowBlur=Math.max(12, w*0.018); }
-      targetCtx.fillStyle='rgba(255,98,0,0.32)'; targetCtx.fill();
-      if(isB){ targetCtx.shadowBlur=0; }
+      // blue fill 28% + white outline + blue glow matches preview .hl path
+      targetCtx.save();
+      targetCtx.shadowColor='rgba(8,102,255,0.9)'; targetCtx.shadowBlur=Math.max(6, w*0.008);
+      targetCtx.fillStyle='rgba(8,102,255,0.28)'; targetCtx.fill();
+      targetCtx.shadowBlur=0;
+      targetCtx.restore();
+    } else {
+      targetCtx.fillStyle='rgba(255,98,0,0.22)'; targetCtx.fill();
     }
     targetCtx.save(); if(isFallback) targetCtx.setLineDash([10,8]);
-    targetCtx.lineWidth=lineWidthHalo+lineWidthOuter; targetCtx.strokeStyle='rgba(255,255,255,0.65)'; targetCtx.stroke();
-    targetCtx.lineWidth=lineWidthOuter; targetCtx.strokeStyle='#ff6200'; targetCtx.stroke(); targetCtx.restore();
-    // label only on main canvas; B uses chip layer
-    if(!isB){
-      let cx=0,cy=0; poly.forEach(pt=>{ cx+=pt[0]; cy+=pt[1]; }); cx=cx/poly.length*w; cy=cy/poly.length*h;
-      const label=r.label||r.part||'region'; const pad=6; targetCtx.font='14px sans-serif'; const metrics=targetCtx.measureText(label); let lx=cx-metrics.width/2-pad; let ly=cy-40;
-      lx=Math.max(pad, Math.min(w-metrics.width-pad*2-pad, lx)); ly=Math.max(pad, Math.min(h-28-pad, ly));
-      targetCtx.fillStyle='rgba(0,0,0,0.85)'; targetCtx.fillRect(lx-pad, ly-pad, metrics.width+pad*2, 20+pad*2);
-      targetCtx.strokeStyle='#ff6200'; targetCtx.lineWidth=2; targetCtx.strokeRect(lx-pad, ly-pad, metrics.width+pad*2, 20+pad*2);
-      targetCtx.fillStyle='#fff'; targetCtx.fillText(label, lx, ly+14);
-      targetCtx.beginPath(); targetCtx.moveTo(cx,cy); targetCtx.lineTo(lx+metrics.width/2, ly); targetCtx.strokeStyle='#ff6200'; targetCtx.lineWidth=Math.max(2, w*0.002); targetCtx.stroke();
-    }
+    targetCtx.lineWidth=lineWidthHalo+lineWidthOuter; targetCtx.strokeStyle='rgba(255,255,255,0.95)'; targetCtx.stroke();
+    targetCtx.lineWidth=Math.max(3, w*0.003); targetCtx.strokeStyle = isFallback ? '#ff6200' : '#fff'; if(!isFallback){ targetCtx.shadowColor='rgba(8,102,255,0.9)'; targetCtx.shadowBlur=6; } targetCtx.stroke(); targetCtx.shadowBlur=0; targetCtx.restore();
+    void 0;
   });
   if(demoMode && demoMode.checked){ targetCtx.fillStyle='rgba(255,255,255,0.9)'; targetCtx.font='bold 16px sans-serif'; targetCtx.fillText('DEMO', 12, 24); }
   targetCanvas.dataset.drawn=Date.now();
@@ -848,19 +843,27 @@ function drawRegions(regions, frame){
   if(canvas && canvas.width && canvas.height) drawToCanvas(ctx, canvas, regions, frame);
   // draw to B canvas with glow if present
   try{ if(typeof canvasB!=='undefined' && canvasB && typeof ctxB!=='undefined' && ctxB && canvasB.width && canvasB.height) drawToCanvas(ctxB, canvasB, regions, frame); }catch(e){}
-  // A highlight chip with white outline/blue glow + white label chip on FROZEN frame
+  // A highlight: SVG outline + pill tag on frozen frame (matches preview .hl)
   try{
     const hc=document.getElementById('highlightChip');
+    const svg=document.getElementById('highlightSVG');
+    const svgPath=svg ? svg.querySelector('path') : null;
     const wrap=document.getElementById('cameraWrap');
-    if(hc){
+    if(hc && svg && svgPath){
       const toShow=(regions||[]).filter(r=> (r.status==='observed' && r.source==='sam3')||r.status==='fallback_box');
-      if(toShow.length && isFrozen){
+      if(toShow.length){
         const r=toShow[0];
+        const poly=r.polygon; if(poly && poly.length>=3){
+          const d='M'+poly.map(p=> (p[0]*100).toFixed(2)+' '+(p[1]*100).toFixed(2)).join(' L')+' Z';
+          const clone=svg.cloneNode(true); clone.querySelector('path').setAttribute('d', d); svg.replaceWith(clone); // retrigger animation
+          clone.hidden=false; clone.classList.add('hl');
+        }
         hc.textContent=r.label||r.part||'Highlighted';
+        // position chip at centroid top
+        let cx=0,cy=0; (r.polygon||[]).forEach(pt=>{cx+=pt[0]; cy+=pt[1]}); if(r.polygon && r.polygon.length){ cx/=r.polygon.length; cy/=r.polygon.length; hc.style.left=(cx*100)+'%'; hc.style.top=(cy*100)+'%'; }
         hc.hidden=false;
         if(wrap){ wrap.classList.add('has-highlight'); wrap.classList.add('is-frozen'); }
-        // also show outline on canvas: add glow via wrap outline
-      } else { hc.hidden=true; if(wrap){ wrap.classList.remove('has-highlight'); if(!isFrozen) wrap.classList.remove('is-frozen'); } }
+      } else { hc.hidden=true; svg.hidden=true; if(wrap){ wrap.classList.remove('has-highlight'); if(!isFrozen) wrap.classList.remove('is-frozen'); } }
     }
   }catch(e){}
   // B label chips overlay (legacy)
@@ -985,8 +988,9 @@ function renderAnswerB(data){
   try{ if(bSubtitles){ bSubtitles.textContent = explanation; bSubtitles.hidden=false; setTimeout(()=>{ if(bSubtitles && !bAnswerSheet.hidden) bSubtitles.hidden=true; }, 1200); } }catch(e){}
 }
 function renderAnswer(data){
-  // also populate hidden #answer for Playwright compat
-  if(answerEl){ answerEl.innerHTML=''; answerEl.hidden=false; }
+  // populate off-screen #answer for Playwright/operator compat (off-screen not behind bar) – on-screen text lives in thread only
+  if(answerEl){ answerEl.textContent=''; answerEl.hidden=false; // CSS moves off-screen
+  }
   try{ if(typeof renderAnswerB!=='function'){ } else { renderAnswerB(data); } }catch(e){}
   // Render into A thread: left-aligned white bubble with blue chips
   try{
@@ -1005,8 +1009,8 @@ function renderAnswer(data){
       ai.textContent=explanation;
       // add blue chips for regions
       const regions=(data.regions||[]).filter(r=> r.status==='observed' && r.source==='sam3');
-      if(regions.length){ const chipRow=document.createElement('div'); chipRow.style.display='flex'; chipRow.style.flexWrap='wrap'; chipRow.style.gap='6px'; chipRow.style.marginTop='8px';
-        regions.forEach(r=>{ const c=document.createElement('span'); c.className='ai-chip'; c.textContent=r.label||r.part||'Highlighted'; chipRow.appendChild(c); });
+      if(regions.length){ const chipRow=document.createElement('div'); chipRow.className='labels';
+        regions.forEach(r=>{ const c=document.createElement('span'); c.textContent=r.label||r.part||'Highlighted'; chipRow.appendChild(c); });
         ai.appendChild(chipRow);
       }
       if(data.needs_view){
@@ -1267,13 +1271,16 @@ if(canvas){
 
 // ------- Live mode (T10) -------
 function resetLiveLatency(){ liveLatency={}; }
-function showTranscript(text){ const clean=collapseDuplicateWords(text); if(transcriptBubble){ transcriptBubble.textContent=clean; transcriptBubble.hidden=false; } try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble){ bTranscriptBubble.textContent=clean; bTranscriptBubble.hidden=false; } }catch(e){}
+function showTranscript(text){ const clean=collapseDuplicateWords(text); // legacy bubbles hidden permanently – only thread is visible
+  if(transcriptBubble){ transcriptBubble.textContent=clean; transcriptBubble.hidden=true; }
+  try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble){ bTranscriptBubble.textContent=clean; bTranscriptBubble.hidden=true; } }catch(e){}
   // also render into thread as right-aligned light-blue bubble
   try{ const thread=document.getElementById('designAThread'); if(thread){ const empty=document.getElementById('emptyState'); if(empty) empty.hidden=true; let me=thread.querySelector('.bub.me'); if(!me){ me=document.createElement('div'); me.className='bub me'; thread.appendChild(me); } me.textContent=clean; me.hidden=false; // hide suggested chips after first question
     const chips=document.getElementById('suggestedChips'); if(chips) chips.hidden=true;
     thread.scrollTop=thread.scrollHeight; setTimeout(()=>{ thread.scrollTop=thread.scrollHeight; }, 100); }
   }catch(e){} }
-function showSubtitles(text){ const clean=collapseDuplicateWords(text); if(subtitlesEl){ subtitlesEl.textContent=clean; subtitlesEl.hidden=false; } try{ if(typeof bSubtitles!=='undefined' && bSubtitles){ bSubtitles.textContent=clean; bSubtitles.hidden=false; } }catch(e){}
+function showSubtitles(text){ const clean=collapseDuplicateWords(text); // legacy subtitles hidden – not shown inside camera card
+  if(subtitlesEl){ subtitlesEl.textContent=clean; subtitlesEl.hidden=true; } try{ if(typeof bSubtitles!=='undefined' && bSubtitles){ bSubtitles.textContent=clean; bSubtitles.hidden=true; } }catch(e){}
   try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble && clean){ bTranscriptBubble.textContent=clean; bTranscriptBubble.hidden=false; } }catch(e){}
 }
 function clearLiveBubbles(){ if(transcriptBubble) transcriptBubble.hidden=true; if(subtitlesEl) subtitlesEl.hidden=true; try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble) bTranscriptBubble.hidden=true; if(typeof bSubtitles!=='undefined' && bSubtitles) bSubtitles.hidden=true; }catch(e){} }
@@ -1348,9 +1355,11 @@ async function startLive(){
     handleLiveBlock(int16);
   };
   try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
-  // offline handling
-  window.addEventListener('offline', ()=>{ if(liveEnabled) setLiveState('Offline — check connection'); });
-  window.addEventListener('online', ()=>{ if(liveEnabled) setLiveState('Listening'); });
+  // offline banner
+  function setOfflineBanner(on){ const b=document.getElementById('offlineBanner'); if(b) b.hidden=!on; }
+  window.addEventListener('offline', ()=>{ setOfflineBanner(true); if(liveEnabled) setAppState('error','Offline — check connection'); });
+  window.addEventListener('online', ()=>{ setOfflineBanner(false); if(liveEnabled) setAppState('listening'); });
+  if(!navigator.onLine) setOfflineBanner(true);
   startScanLoop();
 }
 function stopLive(){
@@ -1654,8 +1663,9 @@ setStatus=function(msg){
   sendClientEvent('page_load','');
   window.addEventListener('error', e=>{ sendClientEvent('window_error', e.message||'error'); });
   window.addEventListener('unhandledrejection', e=>{ sendClientEvent('unhandledrejection', String(e.reason||'error')); });
-  window.addEventListener('offline', ()=> sendClientEvent('offline_online','offline'));
-  window.addEventListener('online', ()=> sendClientEvent('offline_online','online'));
+  // offline banner duplicate handler kept for telemetry; main one above shows banner
+  window.addEventListener('offline', ()=>{ sendClientEvent('offline_online','offline'); const b=document.getElementById('offlineBanner'); if(b) b.hidden=false; });
+  window.addEventListener('online', ()=>{ sendClientEvent('offline_online','online'); const b=document.getElementById('offlineBanner'); if(b) b.hidden=true; });
   // start camera as soon as page opens
   await startCamera(currentFacing);
 })();
