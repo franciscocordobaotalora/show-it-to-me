@@ -92,6 +92,7 @@ function initBRefs(){
 }
 // Live audio state (an earlier voice project pattern)
 let liveEnabled = false;
+let liveSrcNode = null;
 let liveCtx = null, liveStream = null, liveMicNode = null, liveSink = null, liveMaster = null, liveOutputEl = null, liveOutDest = null, liveSources = new Set();
 let liveNextTime = 0;
 let liveBlocks = []; // collected Int16 blocks for current utterance
@@ -579,7 +580,35 @@ function stopCameraTracks(){
   try{ if(window.__liveStopHook) window.__liveStopHook(); }catch(e){}
   // also stop live audio input if present
   try{ if(window.__liveAudioStop) window.__liveAudioStop(); }catch(e){}
+  // camera and microphone are both off from the moment the question ends until the answer is done
+  try{ releaseLiveMic(); }catch(e){}
 }
+function releaseLiveMic(){
+  try{ if(liveSrcNode){ liveSrcNode.disconnect(); liveSrcNode=null; } }catch(e){}
+  try{ if(liveStream){ liveStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} }); liveStream=null; } }catch(e){}
+}
+async function reattachLiveMic(){
+  if(!liveEnabled || !liveCtx || !liveMicNode) return;
+  audioSession('auto');
+  liveStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1}});
+  audioSession('play-and-record');
+  if(liveCtx.state==='suspended'){ try{ await liveCtx.resume(); }catch(e){} }
+  liveSrcNode = liveCtx.createMediaStreamSource(liveStream);
+  liveSrcNode.connect(liveMicNode);
+  liveBlocks=[]; liveSpeaking=false; liveVADState={ speechMs:0, silenceMs:0, totalMs:0 }; livePausedForPlayback=false;
+  try{ if(livePreRollBuffer) livePreRollBuffer.clear(); }catch(e){}
+}
+// Ask another: photo and drawing fade out, camera and microphone come back, listening resumes
+async function askAnother(){
+  try{ resetToLive(); }catch(e){}
+  try{ await startCamera(currentFacing); }catch(e){}
+  if(liveEnabled){
+    try{ await reattachLiveMic(); setLiveState('Listening'); }
+    catch(e){ setStatus('Microphone permission denied, allow it in browser settings and tap Live'); sendClientEvent('mic_denied', String(e&&e.message||'').slice(0,100)); }
+  } else { setAppState('idle'); }
+  sendClientEvent('ask_another','');
+}
+async function restoreAfterError(msg){ if(msg) setStatus(msg); try{ await askAnother(); }catch(e){} }
 function updateHeroForAnswer(isAnswer){
   const hero=document.getElementById('heroLiveBtn'); if(!hero) return;
   const label=hero.querySelector('.live-label'); if(!label) return;
@@ -719,11 +748,11 @@ async function startCamera(facing){
     let msg='';
     // permission messages reuse an earlier voice project mic pattern: instruct to allow in browser settings
     if(name==='NotAllowedError' || name==='PermissionDeniedError') msg='I do not have permission to use the camera. Allow it for this site in the browser settings and try again, or choose a photo.';
-    else if(name==='NotFoundError' || name==='DevicesNotFoundError') msg='No camera found — choose a photo instead';
-    else if(name==='NotReadableError' || name==='AbortError') msg='Camera busy — close other apps or choose a photo';
-    else if(name==='OverconstrainedError') msg='Selected camera not available — try the other';
-    else if(name==='SecurityError') msg='Camera blocked — use the upload link';
-    else msg='Camera unavailable — you can still choose a photo';
+    else if(name==='NotFoundError' || name==='DevicesNotFoundError') msg='No camera found, choose a photo instead';
+    else if(name==='NotReadableError' || name==='AbortError') msg='Camera busy, close other apps or choose a photo';
+    else if(name==='OverconstrainedError') msg='Selected camera not available, try the other';
+    else if(name==='SecurityError') msg='Camera blocked, use the upload link';
+    else msg='Camera unavailable, you can still choose a photo';
     sendClientEvent('camera_error', name||String(e));
     setStatus(msg);
     if(cameraFallback){ cameraFallback.hidden=false; if(cameraFallbackMsg) cameraFallbackMsg.textContent=msg; }
@@ -863,7 +892,7 @@ function freezeFrame(dataUrl, width, height){
   }
   try{ if(typeof videoB!=='undefined' && videoB){ videoB.style.transition='opacity 350ms ease'; videoB.style.opacity='0'; setTimeout(()=>{ videoB.hidden=true; videoB.style.opacity=''; }, 360); } }catch(e){}
   isFrozen = true;
-  // stop camera tracks/mic per spec — light off while thinking/speaking
+  // stop camera tracks/mic per spec, light off while thinking/speaking
   try{ stopCameraTracks(); }catch(e){}
   try{ if(wrap){ wrap.classList.add('is-frozen'); wrap.classList.remove('breathing','comet','bloom'); } }catch(e){}
   requestAnimationFrame(syncOverlaySize);
@@ -935,7 +964,7 @@ function captureFromFile(file){
       timestamp: Date.now(),
       src: 'upload'
     };
-    setStatus('Image ready — type a question and tap Ask');
+    setStatus('Image ready, type a question and tap Ask');
     if(retryBtn) retryBtn.hidden=true;
     requestAnimationFrame(syncOverlaySize);
     clearOverlay();
@@ -1244,18 +1273,18 @@ async function ask(){
   }catch(e){
     const msg = e && e.message || '';
     if(msg==='blank_frame'){
-      setStatus('Captured image was blank — try again with camera ready');
+      setStatus('Captured image was blank, try again with camera ready');
     } else if(msg==='video_not_ready'){
-      setStatus('Camera not ready — wait a moment and try again');
+      setStatus('Camera not ready, wait a moment and try again');
     } else {
-      setStatus('No image to send — allow camera or choose a photo');
+      setStatus('No image to send, allow camera or choose a photo');
     }
     if(retryBtn) retryBtn.hidden=false;
     sendClientEvent('ask_failed', 'no_image_'+msg);
     return;
   }
   if(!captured || !captured.dataUrl){
-    setStatus('Could not capture photo — try again');
+    setStatus('Could not capture photo, try again');
     if(retryBtn) retryBtn.hidden=false;
     return;
   }
@@ -1453,7 +1482,7 @@ async function startLive(){
   try{
     liveStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1}});
   }catch(e){
-    setStatus('Microphone permission denied — allow it in browser settings and try Live again');
+    setStatus('Microphone permission denied, allow it in browser settings and try Live again');
     if(liveStateEl) liveStateEl.textContent='Mic denied';
     sendClientEvent('mic_denied', String(e&&e.message||'').slice(0,100));
     stopLive();
@@ -1467,7 +1496,7 @@ async function startLive(){
   try{ await liveCtx.audioWorklet.addModule('mic-worklet.js'); }catch(e){
     // fallback to ScriptProcessor path
     try{
-      const src=liveCtx.createMediaStreamSource(liveStream);
+      const src=liveCtx.createMediaStreamSource(liveStream); liveSrcNode=src;
       let fbPos=0, fbLast=0;
       const proc=liveCtx.createScriptProcessor(4096,1,1);
       proc.onaudioprocess=(ev)=>{
@@ -1489,7 +1518,7 @@ async function startLive(){
     startScanLoop(); return;
   }
   await connectLiveOutput();
-  const srcNode=liveCtx.createMediaStreamSource(liveStream);
+  const srcNode=liveCtx.createMediaStreamSource(liveStream); liveSrcNode=srcNode;
   liveMicNode=new AudioWorkletNode(liveCtx,'mic-processor');
   // sink to keep worklet alive
   liveSink=liveCtx.createGain(); liveSink.gain.value=0;
@@ -1503,7 +1532,7 @@ async function startLive(){
   try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
   // offline banner
   function setOfflineBanner(on){ const b=document.getElementById('offlineBanner'); if(b) b.hidden=!on; }
-  window.addEventListener('offline', ()=>{ setOfflineBanner(true); if(liveEnabled) setAppState('error','Offline — check connection'); });
+  window.addEventListener('offline', ()=>{ setOfflineBanner(true); if(liveEnabled) setAppState('error','Offline, check connection'); });
   window.addEventListener('online', ()=>{ setOfflineBanner(false); if(liveEnabled) setAppState('listening'); });
   if(!navigator.onLine) setOfflineBanner(true);
   startScanLoop();
@@ -1593,9 +1622,9 @@ async function triggerSpeechEnd(){
       let err={}; try{ err=await resp.json(); }catch(e){}
       setLiveState('Listening');
       if(resp.status===503) setStatus('Voice service unavailable');
-      else if(resp.status===400) setStatus('Could not understand audio — try speaking clearly or type');
-      else if(resp.status===504) setStatus('Voice timed out — try again or type');
-      else setStatus('Transcribe failed — you can type instead');
+      else if(resp.status===400) setStatus('Could not understand audio, try speaking clearly or type');
+      else if(resp.status===504) setStatus('Voice timed out, try again or type');
+      else setStatus('Transcribe failed, you can type instead');
       sendClientEvent('transcribe_fail', resp.status);
       return;
     }
@@ -1611,8 +1640,8 @@ async function triggerSpeechEnd(){
     // analyze with captured frame (same pipeline)
     await runLiveAnalyze(captured, transcript);
   }catch(e){
-    if(e.name==='AbortError'){} else { setStatus('Network error — try typing'); setLiveState('Listening'); sendClientEvent('transcribe_fail','network'); }
-    if(!navigator.onLine) setStatus('Offline — check connection');
+    if(e.name==='AbortError'){} else { setStatus('Network error, try typing'); setLiveState('Listening'); sendClientEvent('transcribe_fail','network'); }
+    if(!navigator.onLine) setStatus('Offline, check connection');
   }
 }
 async function runLiveAnalyze(captured, question){
@@ -1640,7 +1669,7 @@ async function runLiveAnalyze(captured, question){
       liveOneMomentActive=false;
       sendClientEvent('one_moment_cancel','answer_arrived');
     }
-    if(!resp.ok){ setStatus('Could not analyze — try again'); setLiveState('Listening'); return; }
+    if(!resp.ok){ await restoreAfterError('Could not analyze, try again'); setAppState('error'); return; }
     const data=await resp.json();
     if(!data || data.frameId!==frameId) return;
     lastRegions=data.regions||[]; lastFrame=currentFrame; drawRegions(lastRegions, currentFrame); renderAnswer(data);
@@ -1648,8 +1677,8 @@ async function runLiveAnalyze(captured, question){
     setStatus('Answer ready');
     // speak answer
     const answerText=data.explanation||'';
-    if(answerText) await speakAnswerLive(answerText); else setLiveState('Listening');
-  }catch(e){ if(liveOneMomentTimer){ clearTimeout(liveOneMomentTimer); liveOneMomentTimer=null; } setStatus('Network error'); setLiveState('Listening'); }
+    if(answerText) await speakAnswerLive(answerText); else setAppState('answer');
+  }catch(e){ if(liveOneMomentTimer){ clearTimeout(liveOneMomentTimer); liveOneMomentTimer=null; } await restoreAfterError('Network error, try again'); setAppState('error'); }
 }
 async function speakAnswerLive(answerText){
   setAppState('speaking', answerText.slice(0,40));
@@ -1685,21 +1714,14 @@ async function speakAnswerLive(answerText){
       // (d) keep mic paused 400ms after last sample to avoid speaker feedback
       liveResumeAfterSpeakTimeout = setTimeout(()=>{
         livePausedForPlayback=false;
-        audioSession('play-and-record');
-        if(liveEnabled){
-          setLiveState('Listening');
-          setAppState('listening');
-          // continuous conversation: return to live frame
-          try{ resetToLive(); }catch(e){}
-          setAppState('answer', answerText.slice(0,60));
-          // after showing answer briefly, go back to listening (or keep answer state)
-          setTimeout(()=>{ if(liveEnabled) setAppState('listening'); }, 2000);
-        }
+        audioSession('playback');
+        // the photo and the drawing stay on screen; the camera and microphone stay off until Ask another is tapped
+        setAppState('answer', answerText.slice(0,60));
       }, 400);
     }
   },200);
-  // fallback timeout: if no audio, resume after 10s +400ms
-  setTimeout(()=>{ clearInterval(checkDone); if(livePausedForPlayback){ liveResumeAfterSpeakTimeout=setTimeout(()=>{ livePausedForPlayback=false; audioSession('play-and-record'); if(liveEnabled){ setLiveState('Listening'); setAppState('listening'); try{ resetToLive(); }catch(e){} } },400); } }, 12000);
+  // fallback timeout: if no audio, finish the turn after 12 s (photo stays, Ask another appears)
+  setTimeout(()=>{ clearInterval(checkDone); if(livePausedForPlayback){ liveResumeAfterSpeakTimeout=setTimeout(()=>{ livePausedForPlayback=false; audioSession('playback'); setAppState('answer'); },400); } }, 12000);
 }
 function speakTextLive(text, isMoment){
   if(isMoment) liveOneMomentActive=true;
@@ -1873,12 +1895,12 @@ const SIM_STATES=[
   {state:'idle', transcript:'', answer:'', status:'Tap Live and ask about anything', regions:[]},
   {state:'permission_needed', transcript:'', answer:'', status:'Camera and microphone needed to see and answer', regions:[]},
   {state:'starting', transcript:'', answer:'', status:'Starting camera and mic…', regions:[]},
-  {state:'listening', transcript:'', answer:'', status:'Listening — speak naturally', regions:[]},
+  {state:'listening', transcript:'', answer:'', status:'Listening, speak naturally', regions:[]},
   {state:'hearing', transcript:'Where is the power supply?', answer:'', status:'Hearing you…', regions:[]},
   {state:'thinking', transcript:'Where is the power supply?', answer:'', status:'Thinking…', regions:[]},
   {state:'speaking', transcript:'Where is the power supply?', answer:'The USB-C power port is on the left side, next to the micro-HDMI ports.', status:'Speaking…', regions:[{polygon:[[0.12,0.45],[0.18,0.45],[0.18,0.6],[0.12,0.6]]}]},
   {state:'answer', transcript:'Where is the power supply?', answer:'The USB-C power port is on the left side, next to the micro-HDMI ports.', status:'Answer ready', regions:[{polygon:[[0.12,0.45],[0.18,0.45],[0.18,0.6],[0.12,0.6]]}]},
-  {state:'error', transcript:'', answer:'', status:'Microphone permission denied — allow it and try again', regions:[]},
+  {state:'error', transcript:'', answer:'', status:'Microphone permission denied, allow it and try again', regions:[]},
 ];
 function startSimulate(){
   if(simulateTimer) clearInterval(simulateTimer);
@@ -1932,7 +1954,7 @@ function initPermissionScreen(){
     }catch(e){
       setAppState('error', String(e.message||'permission'));
       screen.hidden=false;
-      const msgEl=document.getElementById('permissionMsg'); if(msgEl) msgEl.textContent='Camera or microphone blocked — please allow in browser settings and try again.';
+      const msgEl=document.getElementById('permissionMsg'); if(msgEl) msgEl.textContent='Camera or microphone blocked, please allow in browser settings and try again.';
     }
   });
 }
@@ -1985,8 +2007,7 @@ function initHeroLive(){
   if(!hero) return;
   hero.addEventListener('click', async ()=>{
     if(appState==='answer'){
-      resetToLive();
-      try{ await startCamera(currentFacing); }catch(e){}
+      await askAnother();
       return;
     }
     if(!liveEnabled) await startLive(); else stopLive();
@@ -1994,7 +2015,8 @@ function initHeroLive(){
   // sync hero label with live state via AppState listener (answer handled in setAppState)
   onAppState(({state})=>{
     if(!hero) return;
-    if(state==='answer') return; // handled in setAppState as Ask another
+    if(state==='answer'){ hero.innerHTML='<span class="live-label">Ask another</span>'; hero.classList.remove('is-active'); hero.classList.add('is-ask-another'); hero.style.background='linear-gradient(135deg,#0866FF,#2e7dfe)'; hero.setAttribute('aria-label','Ask another'); return; }
+    hero.classList.remove('is-ask-another'); hero.style.background='';
     if(liveEnabled && (state==='listening'||state==='hearing'||state==='thinking'||state==='speaking')){
       hero.textContent='Stop';
       hero.classList.add('is-active');
@@ -2106,7 +2128,7 @@ function initDesignB(){
     if(canvasB){ canvasB.addEventListener('click', ()=>{ if(isFrozen && previewB && previewB.src) openZoom(previewB.src); }); }
   }catch(e){}
 }
-// Gallery plus button removed for Design A — no visible button
+// Gallery plus button removed for Design A, no visible button
 function initGalleryPlus(){}
 // Init all V2 once DOM ready
 function initV2(){

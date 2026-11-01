@@ -43,22 +43,27 @@ Six steps for each request (open vocabulary):
 5. Build polygons for the overlay (dashed for fallback_box).
 6. Optional second Muse call only if the answer is missing. Otherwise reuse the first answer. Never show an empty answer.
 
-Validation: Pi reference pack is OPTIONAL knowledge boost — only applied when is_pi_board true. Generic path has no allowed-parts list.
+Validation: Pi reference pack is OPTIONAL knowledge boost, only applied when is_pi_board true. Generic path has no allowed-parts list.
 
 ## Run and env
 
+Live deployment (2026-11-01): the API runs on the newbox as the sandboxed systemd service `app-show-it-to-me` on `127.0.0.1:8896`, from this folder (`jobapplications/Cerebral-valley-meta-hackathon/app`, mounted read-only; only `app/logs` is writable). nginx serves `static/` and proxies `/api/` to it, behind the our earlier voice app login. Keys live in `/etc/sandboxed-apps/show-it-to-me.env` (root only, not in the repo). Nothing runs on a GPU: answers come from Muse Spark 1.3 and SAM 3.1 on Meta Model API, speech in from Muse Voice Transcribe, speech out from the CPU speech engine on the Atlas box (HTTP only, nothing installed or changed there). Restart: `sudo systemctl restart app-show-it-to-me`. Logs: `app/logs/events.jsonl` and `journalctl -u app-show-it-to-me`.
+
+Local run for tests:
+
 ```bash
-MUSE_API_BASE=https://... MUSE_API_KEY=... MUSE_MODEL=muse-spark-open-1026 SAM3_CHECKPOINT=/path/to/checkpoint SIT_PORT=8895 python -m server.server
+SAM_BACKEND=meta META_API_KEY=... MUSE_API_BASE=https://api.meta.ai/v1 MUSE_API_KEY=... MUSE_MODEL=muse-spark-1.3 SIT_PORT=8896 python server/server.py
 ```
 
 Env variables:
 
-* `MUSE_API_BASE` - Baseten or vLLM base URL
+* `MUSE_API_BASE` - OpenAI-compatible base URL (Meta Model API, Baseten or a local vLLM)
 * `MUSE_API_KEY` - bearer token. Never write a key into the docs or repo.
 * `MUSE_MODEL` - model id to call
 * `MUSE_MIN_TOKENS` - room for reasoning. 3500 on Baseten so the model can think before returning JSON.
 * `MUSE_REASONING_IN_SYSTEM` - when set, puts "Reasoning strength: low" in the system message. Measured 6.1 s vs 11.1 s per call compared to the template kwarg.
-* `SAM3_CHECKPOINT` - path to SAM 3 weights
+* `SAM_BACKEND` - `meta` (hosted SAM 3.1, no GPU) or `local` (SAM 3 on a GPU, needs `SAM3_CHECKPOINT`)
+* `SAM3_CHECKPOINT` - path to SAM 3 weights, only for the local backend
 * `SIT_PORT` - HTTP port, default 8895
 * `SIT_EVENT_LOG` - log file path, see Logging
 * `META_API_KEY` - Meta Muse Voice Transcribe key (server only, never to browser/logs/git)
@@ -99,21 +104,17 @@ tail -f /data/project/logs/events.jsonl | python3 -m json.tool
 
 ## Page
 
-Meta style design. White cards, blue primary, rounded corners.
+One design, "Conversation" (version 2). White cards, Meta blue, rounded corners, one status pill that always names the current state.
 
-* Live camera preview on load. The video fills the camera card and auto starts with the saved facing or Back by default. Flow is live camera preview on load.
-* Camera choice is two buttons only: Back and Front. Back/Front buttons only, no dropdown, no Take photo / Retake / gallery buttons on screen. The old Take photo, Retake, gallery and Demo mode checkbox controls are hidden and not visible. Choice persists in localStorage and handles devicechange. Back uses facingMode environment, Front uses user. Switching stops the old stream.
-* One question box with no placeholder. It has aria-label Question. One Ask button that captures the current frame, sends photo + question to /api/analyze, freezes the frame, draws the highlight and shows the answer. One Ask button captures the current frame, sends photo plus question to POST /api/analyze, freezes the frame, draws the highlight and shows the answer.
-* Summary for checks: live camera preview on load, Back/Front buttons only, no dropdown, no Take photo / Retake / gallery buttons on screen, one question box with no placeholder, one Ask button that captures the current frame, sends photo + question to /api/analyze, freezes the frame, draws the highlight and shows the answer, editing the question or tapping the image returns to live preview, Choose a photo link only when the camera cannot start, Retry only after an error, ?demo=1 test hook. No camera dropdown, no Demo mode checkbox on screen.
-* Suggested questions are chips under the input. Tapping a chip fills the box but does not send.
-* Editing the question or tapping the image returns to live preview. The frozen frame is cleared and the camera resumes.
-* Choose a photo link appears only when the camera cannot start. It opens the file picker as a fallback.
-* Retry button appears only after an error and resends the last request.
-* Loading state shows a spinner with "Looking at the photo..." while the request is in flight.
-* Tap to zoom: tap the preview or overlay to open a full screen zoom modal.
-* Test hook: adding ?demo=1 to the URL enables the demo overlay. There is no Demo mode checkbox and no camera dropdown on screen.
-
-Privacy note in footer: images stay on device except for inference.
+* Top row: menu button, the status pill (Tap Live to start, Listening, Hearing you, Thinking, Speaking, Here is your answer, Could not reach the model, each with its own colour and animation), and a flip-camera icon that appears only when the phone has more than one camera.
+* Big camera card (about 42 percent of the screen). The thread of bubbles sits under it: your question on the right in light blue, the answer on the left with blue label pills.
+* One hero button at the bottom: **Live**. Tap it once, then just speak. It becomes a red **Stop** while the app listens, hears, thinks and speaks.
+* Typing is secondary: the keyboard icon opens a text box with its own send button.
+* The answer moment: when your question ends, the camera and the microphone switch off (their tracks end, the camera light goes out). The live view cross-fades into the captured photo, the highlight draws itself on it (focus dim, scan sweep, comet trace, fill bloom, ripple, label pop), the answer appears in the thread and is spoken. The photo and the drawing stay on screen. The button becomes **Ask another**; tapping it brings the camera and microphone back and listens again. Nothing restarts by itself.
+* If the analysis fails, the camera comes back and the pill shows the error with one clear action.
+* First run: a card explains why the camera and microphone are needed, then the browser asks. "Choose a photo" appears only when the camera cannot start.
+* Menu sheet: About, Privacy, and the footer text. The main screen has no footer.
+* Test hook: `?demo=1` shows canned states without a camera. The design preview at `/designs/` is a reference mock, not the product.
 
 ## Verified live
 
@@ -128,13 +129,13 @@ Measured on 2026-11-01 through the real tunnel:
 * SAM alone is 141 ms for four parts. Check with `server/sam_bench.py` via `operator/sam-bench.sh`
 * First request after a restart can take about 50 s (model and SAM warm up)
 
-## Scan-ahead (T11) — be ready before the question ends
+## Scan-ahead (T11), be ready before the question ends
 
 Live mode now pre-scans while the camera is steady, so the answer after the question comes in ~2–4 s instead of 9–17 s (goal from Francisco: “when I click the button it is already taking the photo, getting ready”).
 
 * **Server** `POST /api/scan {scanId,image}`: ONE Muse vision call lists 3–8 salient objects (label, sam_prompt, box_1000, caption) plus SAM masks batched; cache by scanId 60 s LRU 8; event `scan_ok` with ms and object count. Rate-limited to 20/min. Returns `{scanId,objects:[{label,sam_prompt,box_1000,polygon,score}],caption}`.
 * **Server** `POST /api/analyze {scanId?}`: if cached scan exists, TEXT-ONLY Muse call (no image tokens, `Reasoning strength: low`, 400 max_tokens) with `[labels,boxes]` + caption answers the question and picks object(s); draws cached polygons. Falls back to full pipeline if cache missing/stale or label not in cache. Both paths return same JSON shape plus `path:"scan"|"full"` and `provenance.timings` ms per stage.
-* **Page** Live mode: scan on (a) Live start and (b) picture steady after motion — 32×32 grayscale frames every 500 ms, `frameDifference()` mean abs diff/255 vs threshold 0.08; scan when diff stays low 600 ms after movement, ≤1 in-flight, ≤1/3 s, paused when Live off or tab hidden. ScanId captured at speech START sent with question. Subtle “● Ready” dot when fresh scan cached (<60 s).
+* **Page** Live mode: scan on (a) Live start and (b) picture steady after motion, 32×32 grayscale frames every 500 ms, `frameDifference()` mean abs diff/255 vs threshold 0.08; scan when diff stays low 600 ms after movement, ≤1 in-flight, ≤1/3 s, paused when Live off or tab hidden. ScanId captured at speech START sent with question. Subtle “● Ready” dot when fresh scan cached (<60 s).
 * **Fallback** is automatic; no empty answer.
 
 ### Measured latency (5 questions × 3 photos each way)
@@ -143,10 +144,10 @@ Cold = full pipeline (vision + SAM + reasoning). Warm = scan path (pre-cached sc
 
 | Photo (source) | Q1 What is this? | Q2 Where main part? | Q3 What color? | Q4 How does it work? | Q5 Visible components? | Median cold | Median warm (local mock) | Correct cold | Correct warm (mock) |
 |---|---|---|---|---|---|---|---|---|---|
-| Pi top — `fixtures/pi5/Raspberry_Pi_5.jpg` | 8.6 s | 18.8 s | 9.5 s | 7.2 s | 19.8 s | 9.5 s | 1.2 s | 5/5 | 5/5 (labels matched) |
-| Pi board — `fixtures/pi5/Raspberry_Pi_5_Board.jpg` | 6.7 s | 14.4 s | 7.5 s | 7.1 s | 8.3 s | 7.5 s | 1.2 s | 5/5 | 5/5 |
-| Espresso — `fixtures/other/espresso.jpg` | 5.9 s | 62.5 s | 26.4 s | 5.5 s | 6.8 s | 6.8 s | 1.2 s | 5/5 | 5/5 |
-| **Overall (15 each)** | — | — | — | — | — | **8.3 s** | **1.2 s** | 15/15 | 15/15 |
+| Pi top, `fixtures/pi5/Raspberry_Pi_5.jpg` | 8.6 s | 18.8 s | 9.5 s | 7.2 s | 19.8 s | 9.5 s | 1.2 s | 5/5 | 5/5 (labels matched) |
+| Pi board, `fixtures/pi5/Raspberry_Pi_5_Board.jpg` | 6.7 s | 14.4 s | 7.5 s | 7.1 s | 8.3 s | 7.5 s | 1.2 s | 5/5 | 5/5 |
+| Espresso, `fixtures/other/espresso.jpg` | 5.9 s | 62.5 s | 26.4 s | 5.5 s | 6.8 s | 6.8 s | 1.2 s | 5/5 | 5/5 |
+| **Overall (15 each)** |, |, |, |, |, | **8.3 s** | **1.2 s** | 15/15 | 15/15 |
 
 * Estimated live warm (text-only real Muse) ~2.0–2.8 s + 0.14 s SAM + network ≈ **2–4 s** end-to-end vs 9–17 s spec and 8.3 s median measured above. SAM is ~34× faster than a second Muse pick call (141 ms vs 5–8 s), per verified fact.
 * Conclusion per ticket rule: scan path **is clearly faster** (≈6.7× local mock, ≈3–4× estimated live) and answer stays correct when scan covers the question object; not wrong more often in these 15 cases. Kept **on by default** with automatic fallback. If live text-only proves slower or wrong, it will be kept off by default (flag `scanEnabled`).
