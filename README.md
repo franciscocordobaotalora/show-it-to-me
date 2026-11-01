@@ -74,6 +74,16 @@ Known limits:
 
 Model provenance revision cec94fcfd6512f2cfe708138c32533b346ea4f69 and runtime vLLM0.30.0.
 
+## Logs
+
+Structured event log written by server/eventlog.py to file named by SIT_EVENT_LOG (default /data/project/logs/events.jsonl). Each line is JSON with ts ISO UTC with ms, event, requestId, frameId, level and fields. Rotation at 20 MB keeping 5 files. Never logs image data/base64/API keys/cookies; image byte size and sha256 prefix logged.
+
+Events: server_start, sam_preload, http_request, http_rejection, glimmer_pass1, sam_candidates, selection, quality_gate, glimmer_pick, final, client_event.
+
+Read live: `tail -f events.jsonl | python3 -m json.tool`
+Find a request: `grep '"requestId":"<id>"' events.jsonl | python3 -m json.tool`
+API: GET /api/events?n=100 (loopback only) returns last n events.
+
 ## Roadmap
 
 - Friday Oct30 build milestone

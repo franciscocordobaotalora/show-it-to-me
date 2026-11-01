@@ -11,6 +11,10 @@ const questionInput = document.getElementById('question');
 const askBtn = document.getElementById('ask');
 const demoMode = document.getElementById('demoMode');
 const answerEl = document.getElementById('answer');
+const cameraSelectWrap = document.getElementById('cameraSelectWrap');
+const cameraSelect = document.getElementById('cameraSelect');
+const camBackBtn = document.getElementById('camBack');
+const camFrontBtn = document.getElementById('camFront');
 
 let currentFrame = null;
 let pendingFrameId = null;
@@ -19,8 +23,12 @@ let lastRegions = [];
 let lastFrame = null;
 let uploadSeq = 0;
 let abortController = null;
+let currentStream = null;
+let selectedDeviceId = null;
 
 function setStatus(s){ statusEl.textContent = s; statusEl.setAttribute('aria-live','polite'); }
+
+function sendClientEvent(eventName, detailObj){ try{ const payload = { event:eventName, detail: String(detailObj||'') .slice(0,300), userAgent: navigator.userAgent.slice(0,160), viewport:{w:window.innerWidth,h:window.innerHeight}, online:navigator.onLine }; const body = JSON.stringify(payload); if(navigator.sendBeacon){ const blob = new Blob([body],{type:'application/json'}); navigator.sendBeacon('/api/client-event', blob); } else { fetch('/api/client-event',{method:'POST', headers:{'Content-Type':'application/json'}, body, keepalive:true}); } }catch(e){} }
 
 function getActiveMedia(){ return preview.hidden ? video : preview; }
 
@@ -45,18 +53,68 @@ function syncOverlaySize(){
   }
 }
 
-async function startCamera(){
+async function startCamera(deviceIdOrConstraints){
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-    video.srcObject = stream;
-    setStatus('Camera ready');
-  }catch(e){
-    // Do not overwrite a newer user status
-    if(!currentFrame && statusEl.textContent === 'Ready'){
-      setStatus('Camera unavailable – use upload');
-      video.hidden = true;
+    if(currentStream){ currentStream.getTracks().forEach(t=>t.stop()); currentStream=null; }
+    let constraints = {video:true};
+    if(deviceIdOrConstraints){
+      if(typeof deviceIdOrConstraints==='string'){
+        constraints.video = {deviceId:{exact:deviceIdOrConstraints}};
+      }else{
+        constraints = deviceIdOrConstraints;
+      }
+    }else{
+      const saved = (()=>{ try{ return localStorage.getItem('cameraDeviceId'); }catch(e){ return null; }})();
+      if(saved){ constraints.video = {deviceId:{exact:saved}}; }
+      else { constraints.video = {facingMode:'environment'}; }
     }
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    currentStream = stream;
+    video.srcObject = stream;
+    video.hidden = false;
+    setStatus('Camera ready');
+    if(cameraSelectWrap){ cameraSelectWrap.hidden = false; }
+    // enumerate devices after permission
+    await enumerateCameras();
+    sendClientEvent('camera_selected', 'camera ready');
+  }catch(e){
+    const name = e.name||'';
+    let msg = '';
+    if(name==='NotAllowedError' || name==='PermissionDeniedError') msg='Camera permission denied \u2013 allow access or use upload';
+    else if(name==='NotFoundError' || name==='DevicesNotFoundError') msg='No camera found \u2013 use upload';
+    else if(name==='NotReadableError' || name==='AbortError') msg='Camera busy \u2013 close other apps or try another camera';
+    else if(name==='OverconstrainedError') msg='Selected camera not available \u2013 choose another';
+    else if(name==='SecurityError') msg='Camera blocked \u2013 use upload';
+    else msg='Camera unavailable \u2013 use upload';
+    sendClientEvent('camera_error', name||String(e));
+    setStatus(msg);
+    // keep video hidden if never captured
+    if(!currentFrame) video.hidden = true;
+    if(cameraSelectWrap) cameraSelectWrap.hidden = false;
   }
+}
+
+async function enumerateCameras(){
+  try{
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter(d=>d.kind==='videoinput');
+    if(cameraSelect){
+      cameraSelect.innerHTML='';
+      if(videoInputs.length===0){
+        const opt=document.createElement('option'); opt.value=''; opt.textContent='No cameras'; cameraSelect.appendChild(opt);
+        sendClientEvent('camera_list', 0);
+        setStatus('No camera found \u2013 use upload');
+        return;
+      }
+      videoInputs.forEach(d=>{ const opt=document.createElement('option'); opt.value=d.deviceId; opt.textContent=d.label||('Camera '+(cameraSelect.options.length+1)); cameraSelect.appendChild(opt); });
+    }
+    sendClientEvent('camera_list', videoInputs.length);
+    // select saved or first
+    let chosen = null;
+    try{ chosen = localStorage.getItem('cameraDeviceId'); }catch(e){}
+    if(chosen && videoInputs.find(d=>d.deviceId===chosen)){ cameraSelect.value = chosen; selectedDeviceId = chosen; }
+    else if(videoInputs.length){ cameraSelect.value = videoInputs[0].deviceId; selectedDeviceId = videoInputs[0].deviceId; try{ localStorage.setItem('cameraDeviceId', selectedDeviceId); }catch(e){} }
+  }catch(e){ sendClientEvent('camera_error', e.name||String(e)); }
 }
 
 function makeFrameId(){ return crypto.randomUUID(); }
@@ -85,6 +143,7 @@ function captureFromVideo(){
   setStatus('Frame captured');
   clearOverlay();
   clearAnswer();
+  sendClientEvent('photo_selected', w + 'x' + h + ' bytes:' + (w*h*3));
 }
 
 let currentObjectUrl = null;
@@ -115,6 +174,7 @@ function captureFromFile(file){
     requestAnimationFrame(syncOverlaySize);
     clearOverlay();
     clearAnswer();
+    sendClientEvent('photo_selected', 'bytes:'+file.size+' '+img.naturalWidth+'x'+img.naturalHeight);
   };
   img.onerror = ()=>{ setStatus('Corrupt image'); URL.revokeObjectURL(url); currentObjectUrl = null; };
   img.src = url;
@@ -318,6 +378,8 @@ async function ask(){
   clearAnswer();
   if(abortController){ try{ abortController.abort(); }catch{} }
   abortController = new AbortController();
+  const t0 = performance.now();
+  sendClientEvent('ask_sent', q);
   try{
     const resp = await fetch('/api/analyze', {
       method: 'POST',
@@ -339,6 +401,8 @@ async function ask(){
       else if(resp.status === 502) msg = 'Model unreachable';
       else if(resp.status >=500) msg = 'Server error';
       else msg = 'Request failed';
+      const ms = Math.round(performance.now() - t0);
+      sendClientEvent('ask_failed', resp.status + ' ' + code + ' ' + ms);
       setStatus(msg);
       return;
     }
@@ -352,6 +416,8 @@ async function ask(){
     lastFrame = currentFrame;
     drawRegions(lastRegions, currentFrame);
     renderAnswer(data);
+    const ms = Math.round(performance.now() - t0);
+    sendClientEvent('ask_ok', ms);
     setStatus('Answer ready');
   }catch(e){
     if(e.name === 'AbortError'){
@@ -388,7 +454,77 @@ uploadBtn.onclick = ()=> fileInput.click();
 fileInput.onchange = e=>{ const f=e.target.files[0]; if(f) captureFromFile(f); };
 askBtn.onclick = ask;
 
+if(cameraSelect){ cameraSelect.onchange = async ()=>{ const id = cameraSelect.value; if(!id) return; try{ localStorage.setItem('cameraDeviceId', id); }catch(e){} selectedDeviceId = id; const label = cameraSelect.options[cameraSelect.selectedIndex]?.textContent || id; sendClientEvent('camera_selected', label); await startCamera(id); } }
+if(camBackBtn){ camBackBtn.onclick = async ()=>{ try{ await startCamera({video:{facingMode:'environment'}}); sendClientEvent('camera_selected','back'); }catch(e){} } }
+if(camFrontBtn){ camFrontBtn.onclick = async ()=>{ try{ await startCamera({video:{facingMode:'user'}}); sendClientEvent('camera_selected','front'); }catch(e){} } }
+if(navigator.mediaDevices){ navigator.mediaDevices.addEventListener('devicechange', async ()=>{
+  const hadSelection = selectedDeviceId;
+  await enumerateCameras();
+  // if previous selection disappeared, notify
+  const stillThere = cameraSelect && Array.from(cameraSelect.options).some(o=>o.value===hadSelection);
+  if(hadSelection && !stillThere){
+    setStatus('Selected camera disconnected \u2013 choose another');
+    sendClientEvent('camera_error','device_unplugged');
+  } else {
+    sendClientEvent('camera_list','devicechange');
+  }
+}); }
+
 video.onloadedmetadata = syncOverlaySize;
 preview.onload = syncOverlaySize;
 window.onresize = syncOverlaySize;
+
+// suggested chips
+const chips = document.getElementById('suggestedChips');
+if(chips){ chips.addEventListener('click', e=>{ const btn=e.target.closest('.chip'); if(!btn) return; const q=btn.dataset.q||btn.textContent; if(questionInput){ questionInput.value=q; questionInput.focus(); } sendClientEvent('suggested_tap', q.slice(0,80)); }); }
+
+// loading overlay
+const loadingEl = document.getElementById('loading');
+const loadingTextEl = loadingEl ? loadingEl.querySelector('.loading-text') : null;
+function showLoading(text){ if(loadingEl){ loadingEl.hidden=false; if(loadingTextEl) loadingTextEl.textContent=text; } }
+function hideLoading(){ if(loadingEl) loadingEl.hidden=true; }
+
+// patch ask loading integration
+const _origSetStatus = setStatus;
+// tap-to-zoom
+const zoomModal = document.getElementById('zoomModal');
+const zoomImg = document.getElementById('zoomImg');
+const zoomClose = document.getElementById('zoomClose');
+function openZoom(src){ if(!zoomModal||!zoomImg) return; zoomImg.src=src; zoomModal.hidden=false; sendClientEvent('zoom_open',''); }
+function closeZoom(){ if(zoomModal) zoomModal.hidden=true; }
+if(zoomModal){ zoomModal.addEventListener('click', e=>{ if(e.target===zoomModal || e.target.classList.contains('zoom-backdrop')) closeZoom(); }); }
+if(zoomClose) zoomClose.onclick=closeZoom;
+if(preview) preview.addEventListener('click', ()=>{ if(preview.src && !preview.hidden) openZoom(preview.src); });
+canvas.addEventListener('click', ()=>{ if(preview.src && !preview.hidden) openZoom(preview.src); else if(currentStream) openZoom(video.srcObject ? '' : ''); });
+
+// retry helper (expose via status retry)
+const retryBtn = document.getElementById('retryBtn');
+if(retryBtn) retryBtn.onclick = ()=>{ clearAnswer(); setStatus('Ready'); ask(); };
+// enhance setStatus to show retry on errors
+const _setStatusOrig = setStatus;
+setStatus = function(msg){
+  _setStatusOrig(msg);
+  if(loadingTextEl && loadingEl && !loadingEl.hidden){ loadingTextEl.textContent=msg; }
+  const isError = /error|busy|timeout|unreachable|failed|denied/i.test(msg);
+  if(retryBtn){ retryBtn.hidden = !isError; }
+};
+
+// hook loading into ask: wrap fetch stages
+// monkey-patch ask to show loading
+const _askOrig = ask;
+ask = async function(){
+  const q = questionInput.value.trim();
+  if(!currentFrame && !askBtn.disabled){ _setStatusOrig('Capture first'); return; }
+  if(!q && !askBtn.disabled){ _setStatusOrig('Enter a question'); return; }
+  showLoading('Looking at the photo...');
+  try{ await _askOrig(); } finally { hideLoading(); }
+};
+
+// page load client event
+sendClientEvent('page_load','');
+window.addEventListener('error', e=>{ sendClientEvent('window_error', e.message||'error'); });
+window.addEventListener('unhandledrejection', e=>{ sendClientEvent('unhandledrejection', String(e.reason||'error')); });
+window.addEventListener('offline', ()=> sendClientEvent('offline_online','offline'));
+window.addEventListener('online', ()=> sendClientEvent('offline_online','online'));
+
 startCamera();

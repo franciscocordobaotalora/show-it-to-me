@@ -7,28 +7,64 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<header>
-<h1>Show It To Me</h1>
-<p class="status" id="status" role="status" aria-live="polite">Ready</p>
+<header class="topbar">
+  <div class="topbar-inner">
+    <h1>Show It To Me</h1>
+    <p class="subtitle">Point, capture, ask about your Pi 5 board</p>
+  </div>
+  <p class="status" id="status" role="status" aria-live="polite">Ready</p>
 </header>
-<main>
-<div class="camera-wrap">
-<video id="video" autoplay playsinline muted></video>
-<canvas id="overlay"></canvas>
-<img id="preview" alt="Preview" hidden />
-<input type="file" id="file" accept="image/*" hidden />
-<button id="capture">Capture</button>
-<button id="retake" hidden>Retake</button>
-<button id="upload">Upload image</button>
-</div>
-<div class="controls">
-<label for="question" class="visually-hidden">Question</label>
-<input id="question" placeholder="Ask about the board…" aria-label="Question" />
-<button id="ask" aria-label="Ask">Ask</button>
-<label class="demo-toggle"><input type="checkbox" id="demoMode" /> Demo mode</label>
-</div>
-<div id="answer" class="answer" hidden></div>
+<main class="container">
+  <section class="card camera-card">
+    <div class="camera-select" id="cameraSelectWrap" hidden>
+      <label for="cameraSelect">Camera</label>
+      <select id="cameraSelect" aria-label="Camera selector"></select>
+      <button id="camBack" type="button" class="btn btn-chip">Back</button>
+      <button id="camFront" type="button" class="btn btn-chip">Front</button>
+    </div>
+    <div class="camera-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <img id="preview" alt="Preview" hidden />
+      <div id="loading" class="loading" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="loading-text">Looking at the photo…</p>
+      </div>
+    </div>
+    <div class="camera-actions">
+      <button id="capture" class="btn btn-primary">Take photo</button>
+      <button id="retake" hidden class="btn btn-secondary">Retake</button>
+      <button id="upload" class="btn btn-secondary">Choose from gallery</button>
+      <input type="file" id="file" accept="image/*" hidden />
+    </div>
+  </section>
+
+  <section class="card question-card">
+    <div class="controls">
+      <label for="question" class="visually-hidden">Question</label>
+      <input id="question" placeholder="Ask about the board…" aria-label="Question" />
+      <button id="ask" class="btn btn-primary" aria-label="Ask">Ask</button>
+      <button id="retryBtn" class="btn btn-secondary" hidden type="button">Retry</button>
+      <label class="demo-toggle"><input type="checkbox" id="demoMode" /> Demo mode</label>
+    </div>
+    <div id="suggestedChips" class="chips" role="group" aria-label="Suggested questions">
+      <button class="chip" type="button" data-q="Where is the SD card slot?">Where is the SD card slot?</button>
+      <button class="chip" type="button" data-q="How do I remove the SD card?">How do I remove the SD card?</button>
+      <button class="chip" type="button" data-q="What are the ports on this board?">What are the ports?</button>
+    </div>
+  </section>
+
+  <div id="answer" class="answer card" hidden></div>
+
+  <div id="zoomModal" class="zoom-modal" hidden>
+    <div class="zoom-backdrop"></div>
+    <img id="zoomImg" alt="Zoomed view" />
+    <button id="zoomClose" class="btn btn-secondary" type="button">Close</button>
+  </div>
 </main>
+<footer class="footer">
+  <p>Show It To Me — Meta hackathon demo • Privacy: images stay on device except for inference</p>
+</footer>
 <script src="app.js"></script>
 </body>
 </html>
