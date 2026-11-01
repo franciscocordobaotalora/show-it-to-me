@@ -2,7 +2,8 @@ import os, json, urllib.request
 
 MUSE_API_BASE = os.getenv('MUSE_API_BASE','')
 MUSE_API_KEY = os.getenv('MUSE_API_KEY','')
-MODEL = 'muse-glimmer-hackathon'
+MODEL = os.getenv('MUSE_MODEL','muse-glimmer-hackathon')
+MIN_TOKENS = int(os.getenv('MUSE_MIN_TOKENS','0'))  # reasoning models need room for thinking before the JSON
 
 def _post_chat(messages, timeout=120, max_tokens=None):
     if not MUSE_API_BASE or not MUSE_API_KEY:
@@ -14,10 +15,19 @@ def _post_chat(messages, timeout=120, max_tokens=None):
     payload = {
         'model': MODEL,
         'messages': messages,
-        'chat_template_kwargs': {'reasoning_strength':'low'}
     }
+    if os.getenv('MUSE_REASONING_IN_SYSTEM'):
+        # Baseten takes the reasoning level from the system message; measured 6.1 s vs 11.1 s with the template kwarg.
+        msgs = [dict(m) for m in messages]
+        if msgs and msgs[0].get('role') == 'system' and isinstance(msgs[0].get('content'), str):
+            msgs[0]['content'] += ' Reasoning strength: low'
+        else:
+            msgs.insert(0, {'role':'system','content':'Reasoning strength: low'})
+        payload['messages'] = msgs
+    else:
+        payload['chat_template_kwargs'] = {'reasoning_strength':'low'}
     if max_tokens is not None:
-        payload['max_tokens'] = max_tokens
+        payload['max_tokens'] = max(max_tokens, MIN_TOKENS)
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method='POST')
     req.add_header('Content-Type','application/json')
