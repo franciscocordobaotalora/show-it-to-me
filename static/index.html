@@ -23,7 +23,15 @@
     <div class="camera-select" id="cameraSelectWrap">
       <button id="camBack" type="button" class="btn btn-chip" aria-label="Back camera">Back</button>
       <button id="camFront" type="button" class="btn btn-chip" aria-label="Front camera">Front</button>
+      <button id="liveToggle" type="button" class="btn btn-live" aria-label="Live voice mode"><span class="mic-icon" aria-hidden="true">🎙</span> Live</button>
     </div>
+    <div id="liveBar" class="live-bar" hidden aria-live="polite">
+      <span id="liveState" class="live-state">Listening</span>
+      <div id="levelMeter" class="level-meter" aria-hidden="true"><div id="levelBar" class="level-bar" style="width:0%"></div></div>
+      <button id="stopBtn" type="button" class="btn btn-stop" hidden>Stop</button>
+    </div>
+    <div id="transcriptBubble" class="transcript-bubble" hidden></div>
+    <div id="subtitles" class="subtitles" hidden></div>
     <div class="camera-wrap" id="cameraWrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="overlay"></canvas>
@@ -79,6 +87,7 @@
 <footer class="footer">
   <p>Show It To Me — Meta hackathon demo • Privacy: images stay on device except for inference</p>
 </footer>
+<script src="live-audio.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

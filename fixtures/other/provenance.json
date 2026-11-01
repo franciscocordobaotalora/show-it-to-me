@@ -1,0 +1,30 @@
+{
+ "bike_derailleur.jpg": {
+  "title": "File:Mounted derailleur hanger.jpg",
+  "license": "CC0",
+  "artist": "<a href=\"//commons.wikimedia.org/wiki/User:Jberkel\" title=\"User:Jberkel\">Jberkel</a>",
+  "source": "https://commons.wikimedia.org/wiki/File:Mounted_derailleur_hanger.jpg",
+  "purpose": "test stand-in"
+ },
+ "bike_brake.jpg": {
+  "title": "File:Bike disc break disc pads and caliper.jpg",
+  "license": "CC BY-SA 4.0",
+  "artist": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:Alextredz&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User",
+  "source": "https://commons.wikimedia.org/wiki/File:Bike_disc_break_disc_pads_and_caliper.jpg",
+  "purpose": "test stand-in"
+ },
+ "espresso.jpg": {
+  "title": "File:Portafilter and tamper.jpg",
+  "license": "CC BY-SA 4.0",
+  "artist": "Czosnek112",
+  "source": "https://commons.wikimedia.org/wiki/File:Portafilter_and_tamper.jpg",
+  "purpose": "test stand-in"
+ },
+ "guitar_tuner.jpg": {
+  "title": "File:Yamaha Pacifica 012 electric guitar headstock rear.jpg",
+  "license": "CC BY 4.0",
+  "artist": "<a href=\"//commons.wikimedia.org/wiki/User:Elmschrat\" title=\"User:Elmschrat\">Elmschrat</a>",
+  "source": "https://commons.wikimedia.org/wiki/File:Yamaha_Pacifica_012_electric_guitar_headstock_rear.jpg",
+  "purpose": "test stand-in"
+ }
+}

@@ -41,6 +41,26 @@ let asking = false;
 let currentObjectUrl = null;
 const tapStart = document.getElementById('tapStart');
 let wakeLock = null;
+// Live mode elements
+const liveToggle = document.getElementById('liveToggle');
+const liveBar = document.getElementById('liveBar');
+const liveStateEl = document.getElementById('liveState');
+const levelMeter = document.getElementById('levelMeter');
+const levelBar = document.getElementById('levelBar');
+const stopBtn = document.getElementById('stopBtn');
+const transcriptBubble = document.getElementById('transcriptBubble');
+const subtitlesEl = document.getElementById('subtitles');
+// Live audio state (an earlier voice project pattern)
+let liveEnabled = false;
+let liveCtx = null, liveStream = null, liveMicNode = null, liveSink = null, liveMaster = null, liveOutputEl = null, liveOutDest = null, liveSources = new Set();
+let liveNextTime = 0;
+let liveBlocks = []; // collected Int16 blocks for current utterance
+let liveVADState = null;
+let liveSpeaking = false;
+let liveSpeechStartFrame = null;
+let liveLatency = {};
+let livePausedForPlayback = false;
+let liveAudioUnlocked = false;
 
 // iOS API guards: check availability with fallbacks (an earlier voice project pattern)
 function safeAt(arr, idx){ try{ if(Array.prototype.at) return arr.at(idx); }catch(e){} return arr[idx<0?arr.length+idx:idx]; }
@@ -59,6 +79,90 @@ const demoMode = { checked: demoFlag };
 // helpers
 function setStatus(s){ if(statusEl) statusEl.textContent = s; if(statusEl) statusEl.setAttribute('aria-live','polite'); }
 function sendClientEvent(eventName, detailObj){ try{ const payload = { event:eventName, detail: String(detailObj||'').slice(0,300), userAgent: navigator.userAgent.slice(0,160), viewport:{w:window.innerWidth,h:window.innerHeight}, online:navigator.onLine }; const body = JSON.stringify(payload); if(navigator.sendBeacon){ const blob = new Blob([body],{type:'application/json'}); navigator.sendBeacon('/api/client-event', blob); } else { fetch('/api/client-event',{method:'POST', headers:{'Content-Type':'application/json'}, body, keepalive:true}); } }catch(e){} }
+// Live helpers
+function setLiveState(s){ if(liveStateEl) liveStateEl.textContent = s; logLatency(s.toLowerCase().replace(' ','_')); }
+function updateLevelMeter(level){ if(levelBar) levelBar.style.width = Math.min(100, Math.round(level*300))+'%'; }
+function logLatency(evt){ const ts = Date.now(); liveLatency[evt] = ts; try{ sendClientEvent(evt, String(ts)); }catch(e){} }
+function buildWavFromBlocks(blocks, sampleRate=16000){
+  const total = blocks.reduce((a,b)=>a+b.length,0);
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  function ws(o,str){ for(let i=0;i<str.length;i++) view.setUint8(o+i,str.charCodeAt(i)); }
+  const byteRate = sampleRate*2; ws(0,'RIFF'); view.setUint32(4,36+total*2,true); ws(8,'WAVE'); ws(12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true); view.setUint32(24,sampleRate,true); view.setUint32(28,byteRate,true); view.setUint16(32,2,true); view.setUint16(34,16,true); ws(36,'data'); view.setUint32(40,total*2,true);
+  const wav = new Uint8Array(44+total*2);
+  wav.set(new Uint8Array(header),0);
+  let off=44;
+  for(const b of blocks){ for(let i=0;i<b.length;i++){ const s=b[i]; wav[off++]=s & 0xff; wav[off++]=(s>>8)&0xff; } }
+  return wav;
+}
+function computeLevelInt16(block){ let sum=0; for(let i=0;i<block.length;i++){ const v=block[i]/32768; sum+=v*v; } return Math.sqrt(sum/block.length); }
+function splitSentencesLive(text){
+  if(window.LiveAudio && window.LiveAudio.splitSentences) return window.LiveAudio.splitSentences(text);
+  if(!text) return [];
+  const raw=text.split(/(?<=[.!?])\s+/);
+  const out=[]; let cur='';
+  for(const s of raw){ const t=s.trim(); if(!t) continue; const cand=cur?cur+' '+t:t; if(cand.length>400){ if(cur) out.push(cur); if(t.length>400){ let p=0; while(p<t.length){ out.push(t.slice(p,p+400)); p+=400;} cur='';} else cur=t; } else cur=cand; }
+  if(cur) out.push(cur); return out.map(s=>/[.!?]$/.test(s)?s:s+'.');
+}
+async function unlockAudioForIOS(){
+  try{
+    if(!liveCtx) return;
+    if(liveCtx.state==='suspended') await liveCtx.resume();
+    // speak empty utterance to unlock SpeechSynthesis on iOS if fallback needed
+    try{ const u=new SpeechSynthesisUtterance(''); u.volume=0; window.speechSynthesis.speak(u); }catch(e){}
+    liveAudioUnlocked=true;
+  }catch(e){}
+}
+async function connectLiveOutput(){
+  if(!liveCtx) return;
+  liveMaster = liveCtx.createGain();
+  // try hidden audio element with setSinkId like an earlier voice project
+  if(typeof HTMLMediaElement.prototype.setSinkId==='function' && navigator.mediaDevices.enumerateDevices){
+    try{
+      liveOutDest = liveCtx.createMediaStreamDestination();
+      liveOutputEl = document.createElement('audio');
+      liveOutputEl.autoplay=true; liveOutputEl.playsInline=true; liveOutputEl.srcObject=liveOutDest.stream;
+      liveOutputEl.hidden=true; document.body.appendChild(liveOutputEl);
+      liveMaster.connect(liveOutDest);
+      await liveOutputEl.play().catch(()=>{});
+      // speaker selection if available
+      try{
+        const devices=await navigator.mediaDevices.enumerateDevices();
+        const sp=devices.find(d=>d.kind==='audiooutput' && /(?:main )?speaker/i.test(d.label) && !/default|receiver|earpiece/i.test(d.label));
+        if(sp && liveOutputEl.setSinkId) await liveOutputEl.setSinkId(sp.deviceId);
+      }catch(e){}
+      return;
+    }catch(e){ try{ liveMaster.disconnect(liveOutDest);}catch(e2){} if(liveOutputEl){ liveOutputEl.pause(); liveOutputEl.srcObject=null; liveOutputEl.remove();} liveOutputEl=null; liveOutDest=null; }
+  }
+  try{ liveMaster.connect(liveCtx.destination); }catch(e){}
+}
+function livePlayPCM(pcmBytes){
+  if(!liveCtx || !liveMaster) return;
+  const i16 = new Int16Array(pcmBytes.byteLength>>1); new Uint8Array(i16.buffer).set(new Uint8Array(pcmBytes,0,i16.length*2));
+  const f=new Float32Array(i16.length); for(let i=0;i<i16.length;i++) f[i]=i16[i]/32768;
+  const buf=liveCtx.createBuffer(1,f.length,24000); buf.copyToChannel(f,0);
+  const src=liveCtx.createBufferSource(); src.buffer=buf; src.connect(liveMaster);
+  const now=liveCtx.currentTime; if(liveNextTime < now+0.04) liveNextTime=now+0.08;
+  src.start(liveNextTime); liveNextTime+=buf.duration; liveSources.add(src); src.onended=()=> liveSources.delete(src);
+}
+function liveFlush(){ liveSources.forEach(s=>{ try{ s.stop(); }catch(e){} }); liveSources.clear(); liveNextTime=0; }
+function liveFallbackTTS(text){
+  try{
+    if(!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);
+    // wait for voices if needed
+    const voices=window.speechSynthesis.getVoices();
+    if(voices && voices.length){
+      // simple language match: check answer language heuristic
+      const isSpanish=/[áéíóúñ¿¡]/i.test(text);
+      const v=voices.find(v=> isSpanish? v.lang.toLowerCase().includes('es') : v.lang.toLowerCase().includes('en'));
+      if(v) u.voice=v;
+    }
+    window.speechSynthesis.speak(u);
+    sendClientEvent('tts_fallback','used');
+  }catch(e){}
+}
 function makeFrameId(){ try{ return crypto.randomUUID(); }catch(e){ return 'f'+Math.random().toString(16).slice(2); } }
 function orientationFrom(w,h){ if(w>h) return 'landscape'; if(h>w) return 'portrait'; return 'square'; }
 function getActiveMedia(){ return (preview && !preview.hidden) ? preview : video; }
@@ -687,6 +791,256 @@ if(canvas){
   });
 }
 
+// ------- Live mode (T10) -------
+function resetLiveLatency(){ liveLatency={}; }
+function showTranscript(text){ if(!transcriptBubble) return; transcriptBubble.textContent=text; transcriptBubble.hidden=false; }
+function showSubtitles(text){ if(!subtitlesEl) return; subtitlesEl.textContent=text; subtitlesEl.hidden=false; }
+function clearLiveBubbles(){ if(transcriptBubble) transcriptBubble.hidden=true; if(subtitlesEl) subtitlesEl.hidden=true; }
+async function startLive(){
+  if(liveEnabled) return;
+  // user gesture required
+  liveEnabled=true;
+  if(liveToggle) liveToggle.classList.add('active');
+  if(liveBar) liveBar.hidden=false;
+  if(stopBtn) stopBtn.hidden=false;
+  clearLiveBubbles();
+  resetLiveLatency();
+  setLiveState('Listening');
+  liveBlocks=[]; liveSpeaking=false; liveVADState={ speechMs:0, silenceMs:0, totalMs:0 };
+  // start camera if not already
+  if(!currentStream) { try{ await startCamera(currentFacing); }catch(e){} }
+  // audioSession like an earlier voice project
+  audioSession('auto');
+  try{
+    liveStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1}});
+  }catch(e){
+    setStatus('Microphone permission denied — allow it in browser settings and try Live again');
+    if(liveStateEl) liveStateEl.textContent='Mic denied';
+    sendClientEvent('mic_denied', String(e&&e.message||'').slice(0,100));
+    stopLive();
+    return;
+  }
+  audioSession('play-and-record');
+  const AC=window.AudioContext||window.webkitAudioContext;
+  liveCtx=new AC({latencyHint:'interactive'});
+  if(liveCtx.state==='suspended') await liveCtx.resume();
+  await unlockAudioForIOS();
+  try{ await liveCtx.audioWorklet.addModule('mic-worklet.js'); }catch(e){
+    // fallback to ScriptProcessor path
+    try{
+      const src=liveCtx.createMediaStreamSource(liveStream);
+      let fbPos=0, fbLast=0;
+      const proc=liveCtx.createScriptProcessor(4096,1,1);
+      proc.onaudioprocess=(ev)=>{
+        const ch=ev.inputBuffer.getChannelData(0);
+        // Linear resample from the context rate (usually 48 kHz) to 16 kHz, with carry-over between blocks.
+        const ratio=liveCtx.sampleRate/16000;
+        const ext=new Float32Array(ch.length+1); ext[0]=fbLast; ext.set(ch,1);
+        const out=[]; let pos=fbPos;
+        while(pos<ext.length-1){ const i=Math.floor(pos), f=pos-i; let v=ext[i]*(1-f)+ext[i+1]*f; v=Math.max(-1,Math.min(1,v)); out.push(v<0? v*32768 : v*32767); pos+=ratio; }
+        fbPos=pos-ch.length; fbLast=ch[ch.length-1];
+        if(livePausedForPlayback) return;
+        handleLiveBlock(Int16Array.from(out));
+      };
+      src.connect(proc); proc.connect(liveCtx.destination);
+      liveMicNode=proc;
+    }catch(e2){}
+    await connectLiveOutput();
+    try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
+    return;
+  }
+  await connectLiveOutput();
+  const srcNode=liveCtx.createMediaStreamSource(liveStream);
+  liveMicNode=new AudioWorkletNode(liveCtx,'mic-processor');
+  // sink to keep worklet alive
+  liveSink=liveCtx.createGain(); liveSink.gain.value=0;
+  liveMicNode.connect(liveSink); liveSink.connect(liveCtx.destination);
+  srcNode.connect(liveMicNode);
+  liveMicNode.port.onmessage=(e)=>{
+    if(livePausedForPlayback) return;
+    const int16=new Int16Array(e.data);
+    handleLiveBlock(int16);
+  };
+  try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
+  // offline handling
+  window.addEventListener('offline', ()=>{ if(liveEnabled) setLiveState('Offline — check connection'); });
+  window.addEventListener('online', ()=>{ if(liveEnabled) setLiveState('Listening'); });
+}
+function stopLive(){
+  liveEnabled=false;
+  if(liveToggle) liveToggle.classList.remove('active');
+  if(liveBar) liveBar.hidden=true;
+  if(stopBtn) stopBtn.hidden=true;
+  setLiveState('Idle');
+  liveFlush();
+  if(liveMicNode){ try{ liveMicNode.disconnect(); }catch(e){} liveMicNode=null; }
+  if(liveSink){ try{ liveSink.disconnect(); }catch(e){} liveSink=null; }
+  if(liveStream){ liveStream.getTracks().forEach(t=>t.stop()); liveStream=null; }
+  if(liveCtx){ try{ liveCtx.close(); }catch(e){} liveCtx=null; }
+  if(liveOutputEl){ liveOutputEl.pause(); liveOutputEl.srcObject=null; liveOutputEl.remove(); liveOutputEl=null; } liveOutDest=null; liveMaster=null; liveNextTime=0;
+  audioSession('playback'); audioSession('auto');
+  if(wakeLock){ try{ wakeLock.release(); }catch(e){} wakeLock=null; }
+  liveBlocks=[]; liveSpeaking=false; liveSpeechStartFrame=null;
+}
+function handleLiveBlock(int16){
+  const level=computeLevelInt16(int16);
+  updateLevelMeter(level);
+  const isSpeech= level > 0.02;
+  if(!liveSpeaking){
+    if(isSpeech) liveVADState.speechMs+=100; else liveVADState.speechMs=0;
+    if(liveVADState.speechMs >= 150){
+      // speech start
+      liveSpeaking=true;
+      liveVADState.silenceMs=0; liveVADState.totalMs=liveVADState.speechMs;
+      liveBlocks=[];
+      liveLatency.speech_start=Date.now(); sendClientEvent('speech_start','');
+      setLiveState('Hearing you');
+      // capture frame at speech START
+      captureLiveFrame().then(c=>{
+        liveSpeechStartFrame=c;
+        // store frame for later analyze: we need to freeze it to get canvas size correct
+        // but don't freeze UI yet; just keep dataUrl
+      }).catch(()=>{ liveSpeechStartFrame=null; });
+    }
+  } else {
+    liveVADState.totalMs+=100;
+    liveBlocks.push(int16);
+    if(isSpeech) liveVADState.silenceMs=0; else liveVADState.silenceMs+=100;
+    // max 15s utterance
+    if(liveVADState.totalMs >= 15000){
+      triggerSpeechEnd();
+      return;
+    }
+    if(liveVADState.silenceMs >= 900){
+      triggerSpeechEnd();
+    }
+  }
+}
+async function triggerSpeechEnd(){
+  if(!liveSpeaking) return;
+  liveSpeaking=false;
+  const wasBlocks=liveBlocks.slice();
+  liveBlocks=[]; liveVADState={speechMs:0,silenceMs:0,totalMs:0};
+  logLatency('speech_end');
+  setLiveState('Thinking');
+  if(!wasBlocks.length){ setLiveState('Listening'); return; }
+  const wav=buildWavFromBlocks(wasBlocks,16000);
+  if(wav.length> 2*1024*1024){ setStatus('Audio too long'); setLiveState('Listening'); return; }
+  // show capturing frame or fallback to current video capture
+  let frame=liveSpeechStartFrame;
+  if(!frame){
+    try{ frame=await captureLiveFrame(); }catch(e){}
+  }
+  liveSpeechStartFrame=null;
+  if(!frame || !frame.dataUrl){ setLiveState('Listening'); return; }
+  // keep frame for analyze
+  const captured=frame;
+  // transcribe
+  try{
+    const resp=await fetch('/api/transcribe',{method:'POST', headers:{'Content-Type':'audio/wav'}, body:wav});
+    if(!resp.ok){
+      let err={}; try{ err=await resp.json(); }catch(e){}
+      setLiveState('Listening');
+      if(resp.status===503) setStatus('Voice service unavailable');
+      else if(resp.status===400) setStatus('Could not understand audio — try speaking clearly or type');
+      else if(resp.status===504) setStatus('Voice timed out — try again or type');
+      else setStatus('Transcribe failed — you can type instead');
+      sendClientEvent('transcribe_fail', resp.status);
+      return;
+    }
+    const data=await resp.json();
+    const transcript=(data.transcript||'').trim();
+    logLatency('transcript'); sendClientEvent('transcript', transcript.slice(0,80));
+    if(!transcript || transcript.length<3){
+      setLiveState('Listening');
+      return;
+    }
+    showTranscript(transcript);
+    if(questionInput) questionInput.value=transcript;
+    // analyze with captured frame (same pipeline)
+    await runLiveAnalyze(captured, transcript);
+  }catch(e){
+    if(e.name==='AbortError'){} else { setStatus('Network error — try typing'); setLiveState('Listening'); sendClientEvent('transcribe_fail','network'); }
+    if(!navigator.onLine) setStatus('Offline — check connection');
+  }
+}
+async function runLiveAnalyze(captured, question){
+  const frameId=makeFrameId(); const requestId=(()=>{ try{ return crypto.randomUUID(); }catch(e){ return 'r'+Math.random().toString(16).slice(2); } })();
+  // freeze preview to show captured frame
+  try{ freezeFrame(captured.dataUrl, captured.width, captured.height); }catch(e){}
+  pendingFrameId=frameId; pendingRequestId=requestId;
+  logLatency('analyze_sent'); sendClientEvent('analyze_sent', question.slice(0,60));
+  setLiveState('Thinking');
+  let sayMomentTimer=setTimeout(()=>{
+    // say "One moment" via TTS if takes >3s
+    speakTextLive('One moment', true);
+  },3000);
+  try{
+    const resp=await fetch('/api/analyze',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({frameId, requestId, question, image:captured.dataUrl})});
+    clearTimeout(sayMomentTimer);
+    if(!resp.ok){ setStatus('Could not analyze — try again'); setLiveState('Listening'); return; }
+    const data=await resp.json();
+    if(!data || data.frameId!==frameId) return;
+    lastRegions=data.regions||[]; lastFrame=currentFrame; drawRegions(lastRegions, currentFrame); renderAnswer(data);
+    logLatency('answer'); sendClientEvent('answer', String(data.explanation||'').slice(0,80));
+    setStatus('Answer ready');
+    // speak answer
+    const answerText=data.explanation||'';
+    if(answerText) await speakAnswerLive(answerText); else setLiveState('Listening');
+  }catch(e){ clearTimeout(sayMomentTimer); setStatus('Network error'); setLiveState('Listening'); }
+}
+async function speakAnswerLive(answerText){
+  setLiveState('Speaking'); showSubtitles(answerText);
+  livePausedForPlayback=true; audioSession('playback');
+  const sentences=splitSentencesLive(answerText);
+  let firstByteTime=null;
+  for(let idx=0; idx<sentences.length; idx++){
+    const sent=sentences[idx];
+    // prefetch next while one plays: we do sequential but start fetch early for next
+    try{
+      const t0=performance.now();
+      const resp=await fetch('/api/speak',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text:sent})});
+      if(!resp.ok){
+        liveFallbackTTS(sent);
+        continue;
+      }
+      const pcm=await resp.arrayBuffer();
+      if(firstByteTime===null){ firstByteTime=performance.now(); const ms=Math.round(firstByteTime - (liveLatency.answer||firstByteTime)); sendClientEvent('spoken', String(ms)); }
+      livePlayPCM(pcm);
+      // wait until this buffer finished? We schedule nextTime like our-earlier-voice-app; to keep order we don't wait strictly but allow overlap
+      // small delay to ensure ordering
+    }catch(e){
+      liveFallbackTTS(sent);
+      sendClientEvent('tts_fallback', String(e).slice(0,80));
+    }
+  }
+  // wait for all sources to finish then resume listening
+  const checkDone=setInterval(()=>{
+    if(liveSources.size===0){
+      clearInterval(checkDone);
+      livePausedForPlayback=false;
+      audioSession('play-and-record');
+      if(liveEnabled) setLiveState('Listening');
+      // after speaking, update subtitles? keep visible
+    }
+  },200);
+  // fallback timeout: if no audio, resume after 10s
+  setTimeout(()=>{ clearInterval(checkDone); if(livePausedForPlayback){ livePausedForPlayback=false; audioSession('play-and-record'); if(liveEnabled) setLiveState('Listening'); } }, 12000);
+}
+function speakTextLive(text, isMoment){
+  // used for "One moment" immediate
+  fetch('/api/speak',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})}).then(r=>r.ok? r.arrayBuffer():null).then(buf=>{ if(buf) livePlayPCM(buf); }).catch(()=>{ liveFallbackTTS(text); });
+}
+// Live controls
+if(liveToggle) liveToggle.onclick=async ()=>{
+  if(!liveEnabled) await startLive(); else stopLive();
+};
+if(stopBtn) stopBtn.onclick=()=>{
+  liveFlush(); if(window.speechSynthesis) window.speechSynthesis.cancel();
+  livePausedForPlayback=false; audioSession('play-and-record'); if(liveEnabled) setLiveState('Listening');
+  if(subtitlesEl) subtitlesEl.hidden=true;
+  sendClientEvent('stop','');
+};
 // controls
 if(askBtn) askBtn.onclick=ask;
 if(retryBtn) retryBtn.onclick=()=>{ clearAnswer(); setStatus('Ready'); if(retryBtn) retryBtn.hidden=true; ask(); };

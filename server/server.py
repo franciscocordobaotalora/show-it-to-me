@@ -1,6 +1,168 @@
-import json, io, threading, base64, re, os, time
+import json, io, threading, base64, re, os, time, urllib.request, urllib.error, uuid, struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import eventlog
+
+# T10 live mode constants
+TRANSCRIBE_MAX_BYTES = 2 * 1024 * 1024
+TRANSCRIBE_MAX_MS = 30 * 1000
+SPEAK_MAX_CHARS = 400
+META_ASR_URL = os.getenv('META_ASR_URL', 'https://api.meta.ai/v1/asr/transcribe')
+ENGINE_BASE_DEFAULT = 'http://ENGINE_HOST:8851'
+
+def _wav_info(wav_bytes):
+    """Parse WAV header for duration check. Returns dict or None."""
+    try:
+        if len(wav_bytes) < 44:
+            return None
+        if wav_bytes[0:4] != b'RIFF' or wav_bytes[8:12] != b'WAVE':
+            return None
+        # find fmt chunk (usually at 12)
+        # Simple parse: assume canonical 44-byte header
+        import struct as _st
+        channels = _st.unpack_from('<H', wav_bytes, 22)[0]
+        sample_rate = _st.unpack_from('<I', wav_bytes, 24)[0]
+        bits = _st.unpack_from('<H', wav_bytes, 34)[0]
+        data_size = _st.unpack_from('<I', wav_bytes, 40)[0]
+        if data_size == 0:
+            data_size = len(wav_bytes) - 44
+        bytes_per_sample = bits // 8 * channels
+        if bytes_per_sample == 0 or sample_rate == 0:
+            return None
+        duration_ms = int(data_size / (sample_rate * bytes_per_sample) * 1000)
+        return {'sample_rate': sample_rate, 'channels': channels, 'bits': bits, 'duration_ms': duration_ms, 'data_size': data_size}
+    except Exception:
+        return None
+
+def _forward_to_meta(wav_bytes, api_key, timeout=12):
+    """Forward WAV to Meta ASR. Patchable for tests."""
+    boundary = uuid.uuid4().hex
+    req_json = json.dumps({"mode":"PUSH_TO_TALK","model":"muse-voice-transcribe-1.0","audioEncoding":"WAV"})
+    crlf = b'\r\n'
+    body_parts = []
+    body_parts.append(b'--' + boundary.encode() + crlf)
+    body_parts.append(b'Content-Disposition: form-data; name="request"' + crlf)
+    body_parts.append(b'Content-Type: application/json' + crlf + crlf)
+    body_parts.append(req_json.encode() + crlf)
+    body_parts.append(b'--' + boundary.encode() + crlf)
+    body_parts.append(b'Content-Disposition: form-data; name="audio"; filename="audio.wav"' + crlf)
+    body_parts.append(b'Content-Type: audio/wav' + crlf + crlf)
+    body_parts.append(wav_bytes + crlf)
+    body_parts.append(b'--' + boundary.encode() + b'--' + crlf)
+    body = b''.join(body_parts)
+    url = META_ASR_URL
+    req = urllib.request.Request(url, data=body, method='POST')
+    req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+    req.add_header('Authorization', f'Bearer {api_key}')
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read()
+        return json.loads(data)
+
+def _forward_to_engine(text, engine_base, engine_token, timeout=12):
+    """Forward TTS request. Returns (status_code, headers_dict, body_bytes). Patchable."""
+    url = engine_base.rstrip('/') + '/tts'
+    payload = json.dumps({"text": text, "voice": "alba"}).encode()
+    req = urllib.request.Request(url, data=payload, method='POST')
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('Authorization', f'Bearer {engine_token}')
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read()
+        hdrs = dict(resp.headers) if hasattr(resp, 'headers') else {}
+        return resp.status, hdrs, body
+
+def handle_transcribe_request(wav_bytes, meta_key, forward_fn=None):
+    """Testable helper for /api/transcribe"""
+    if not meta_key:
+        return 503, {'error':'transcribe_unavailable','message':'Speech service not configured'}
+    if len(wav_bytes) > TRANSCRIBE_MAX_BYTES:
+        return 413, {'error':'audio_too_large'}
+    if len(wav_bytes)==0:
+        return 400, {'error':'empty_audio'}
+    info=_wav_info(wav_bytes)
+    if info and info['duration_ms'] > TRANSCRIBE_MAX_MS:
+        return 413, {'error':'audio_too_long'}
+    t0=time.time()
+    fn = forward_fn or _forward_to_meta
+    try:
+        meta_resp = fn(wav_bytes, meta_key)
+        ms=int((time.time()-t0)*1000)
+        transcript=meta_resp.get('transcript','')
+        audio_ms=meta_resp.get('audioDurationMs') or (info['duration_ms'] if info else None)
+        eventlog.log_event('transcribe_ok', level='info', ms=ms, audio_length=len(wav_bytes), audio_ms=audio_ms)
+        return 200, {'transcript': transcript, 'ms': audio_ms or ms}
+    except urllib.error.HTTPError as e:
+        ms=int((time.time()-t0)*1000)
+        try: body=e.read().decode()[:200]
+        except: body=str(e)
+        eventlog.log_event('transcribe_fail', level='error', error='http_'+str(e.code), ms=ms, audio_length=len(wav_bytes))
+        if e.code==400:
+            return 400, {'error':'transcribe_rejected','message':'Invalid audio format'}
+        elif e.code in (401,403):
+            return 502, {'error':'transcribe_auth_failed'}
+        else:
+            return 502, {'error':'transcribe_failed','code':e.code}
+    except urllib.error.URLError as e:
+        ms=int((time.time()-t0)*1000)
+        if 'timed out' in str(e.reason).lower() or 'timeout' in str(e).lower():
+            eventlog.log_event('transcribe_fail', level='error', error='timeout', ms=ms, audio_length=len(wav_bytes))
+            return 504, {'error':'transcribe_timeout'}
+        else:
+            eventlog.log_event('transcribe_fail', level='error', error='unreachable', ms=ms, audio_length=len(wav_bytes))
+            return 502, {'error':'transcribe_unreachable'}
+    except TimeoutError:
+        ms=int((time.time()-t0)*1000)
+        eventlog.log_event('transcribe_fail', level='error', error='timeout', ms=ms, audio_length=len(wav_bytes))
+        return 504, {'error':'transcribe_timeout'}
+    except Exception as e:
+        import traceback as _tb
+        ms=int((time.time()-t0)*1000)
+        if 'timeout' in str(e).lower():
+            eventlog.log_event('transcribe_fail', level='error', error='timeout', ms=ms, audio_length=len(wav_bytes))
+            return 504, {'error':'transcribe_timeout'}
+        eventlog.log_event('transcribe_fail', level='error', error='exception', ms=ms, audio_length=len(wav_bytes), traceback=_tb.format_exc()[:500])
+        return 500, {'error':'transcribe_failed'}
+
+def handle_speak_request(text, engine_token, engine_base, forward_fn=None):
+    if not engine_token:
+        return 503, {'error':'tts_unavailable','message':'Voice service not configured'}, None
+    if not isinstance(text,str) or not text.strip():
+        return 400, {'error':'missing_text'}, None
+    if len(text) > SPEAK_MAX_CHARS:
+        return 400, {'error':'text_too_long','max': SPEAK_MAX_CHARS}, None
+    t0=time.time()
+    fn = forward_fn or _forward_to_engine
+    try:
+        scode, hdrs, pcm = fn(text, engine_base, engine_token)
+        ms_first=int((time.time()-t0)*1000)
+        eventlog.log_event('speak_ok', level='info', ms=ms_first, text_length=len(text))
+        return 200, {'pcm': pcm, 'headers': hdrs}, None
+    except urllib.error.HTTPError as e:
+        ms=int((time.time()-t0)*1000)
+        eventlog.log_event('speak_fail', level='error', error='http_'+str(e.code), ms=ms, text_length=len(text))
+        if e.code==401:
+            return 502, {'error':'tts_auth_failed'}, None
+        else:
+            return 502, {'error':'tts_failed','code':e.code}, None
+    except urllib.error.URLError as e:
+        ms=int((time.time()-t0)*1000)
+        if 'timed out' in str(e.reason).lower() or 'timeout' in str(e).lower():
+            eventlog.log_event('speak_fail', level='error', error='timeout', ms=ms)
+            return 504, {'error':'tts_timeout'}, None
+        else:
+            eventlog.log_event('speak_fail', level='error', error='unreachable', ms=ms)
+            return 502, {'error':'tts_unreachable'}, None
+    except TimeoutError:
+        ms=int((time.time()-t0)*1000)
+        eventlog.log_event('speak_fail', level='error', error='timeout', ms=ms)
+        return 504, {'error':'tts_timeout'}, None
+    except Exception as e:
+        import traceback as _tb2
+        ms=int((time.time()-t0)*1000)
+        if 'timeout' in str(e).lower():
+            eventlog.log_event('speak_fail', level='error', error='timeout', ms=ms)
+            return 504, {'error':'tts_timeout'}, None
+        eventlog.log_event('speak_fail', level='error', error='exception', ms=ms, traceback=_tb2.format_exc()[:500])
+        return 500, {'error':'tts_failed'}, None
+
 
 MAX_SIZE = 10*1024*1024
 MAX_QUESTION = 500
@@ -543,6 +705,43 @@ class Handler(BaseHTTPRequestHandler):
                 eventlog.log_event('client_event', level='info', client_event=event, detail=detail, userAgent=userAgent, viewport=viewport, online=online)
                 self._json(200, {'ok':True})
                 status = 200
+                return
+            if path == '/api/transcribe':
+                try: length=int(self.headers.get('Content-Length',0))
+                except: length=0
+                wav_bytes=self.rfile.read(length) if length else b''
+                meta_key=os.getenv('META_API_KEY')
+                sc, resp_body = handle_transcribe_request(wav_bytes, meta_key)
+                self._json(sc, resp_body)
+                status=sc
+                return
+            if path == '/api/speak':
+                try: length=int(self.headers.get('Content-Length',0))
+                except: length=0
+                body=self.rfile.read(length) if length else b''
+                try: data=json.loads(body) if body else {}
+                except:
+                    self._json(400, {'error':'invalid_json'})
+                    status=400
+                    eventlog.log_event('speak_fail', level='warn', error='invalid_json')
+                    return
+                text=data.get('text','')
+                engine_token=os.getenv('ENGINE_TOKEN')
+                engine_base=os.getenv('ENGINE_BASE', ENGINE_BASE_DEFAULT)
+                sc, resp_body, _ = handle_speak_request(text, engine_token, engine_base)
+                if sc==200 and 'pcm' in resp_body:
+                    pcm=resp_body['pcm']
+                    self.send_response(200)
+                    self.send_header('Content-Type','application/octet-stream')
+                    self.send_header('X-Sample-Rate','24000')
+                    self.send_header('Content-Length', str(len(pcm)))
+                    self.send_header('Cache-Control','no-store')
+                    self.end_headers()
+                    self.wfile.write(pcm)
+                    status=200
+                else:
+                    self._json(sc, resp_body)
+                    status=sc
                 return
             if path != '/api/analyze':
                 self.send_error(404)

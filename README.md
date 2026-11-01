@@ -53,6 +53,10 @@ Env variables:
 * `SAM3_CHECKPOINT` - path to SAM 3 weights
 * `SIT_PORT` - HTTP port, default 8895
 * `SIT_EVENT_LOG` - log file path, see Logging
+* `META_API_KEY` - Meta Muse Voice Transcribe key (server only, never to browser/logs/git)
+* `ENGINE_TOKEN` - TTS engine bearer token (server only)
+* `ENGINE_BASE` - TTS engine base URL, default http://ENGINE_HOST:8851
+* `META_ASR_URL` - override ASR endpoint for tests
 
 Request is `POST /api/analyze` with frameId, requestId, question, and image as data URL. Response returns frameId, requestId, view, needs_view, regions with polygons and provenance with timings and selection debug.
 
@@ -131,9 +135,31 @@ node --check static/app.js
 
 The Python suite covers eventlog, server validation, SAM helpers, and the T03H and T03J cases.
 
-## Next: live mode
+## Live voice mode (T10)
 
-Planned, not built. Voice question using Meta speech-to-text, auto capture when the question starts, scan-ahead cache of all parts, spoken answer. This will make the guide hands free. No code for this exists yet. For checks: voice question (Meta speech-to-text), auto capture when the question starts, scan-ahead cache of all parts, spoken answer. Marked as planned, not built.
+Tap **Live** (Meta blue pill, mic icon, next to Back/Front) to enter voice mode. The button is a user gesture that starts camera, unlocks audio (AudioContext resume + empty SpeechSynthesis), and starts listening.
+
+- State label: **Listening / Hearing you / Thinking / Speaking** plus a level meter.
+- Mic capture via `AudioWorklet` (an earlier voice project `mic-worklet.js`, 16 kHz int16 100 ms blocks); fallback to ScriptProcessor.
+- VAD: speech starts after 150 ms above threshold, ends after 900 ms quiet; max 15 s; pauses while speaking so the app never hears itself (audioSession `playback` ↔ `play-and-record`). Frame is captured at **speech start**.
+- At speech end, WAV (max 2 MB / 30 s) is POSTed to `/api/transcribe` (Meta Muse Voice Transcribe); transcript shown as bubble; if <3 chars ignored.
+- Then `POST /api/analyze` with that frame + transcript; draws highlight, shows subtitles.
+- Answer spoken via TTS engine: `POST /api/speak {text}` proxies to `ENGINE_BASE/tts` (`voice alba`, 24 kHz PCM), split by sentence, prefetched, played via Web Audio `play(buf)` into hidden `<audio>` with `setSinkId` speaker routing (an earlier voice project pattern); `Stop` flushes. Falls back to `speechSynthesis` with `tts_fallback` log if engine fails. Says "One moment" if >3 s.
+- Errors: mic denied, no speech, transcribe failed (offer to type), offline. Typed Ask never breaks.
+
+### Latency log
+
+Events with timestamps: `speech_start`, `speech_end`, `transcript`, `analyze_sent`, `answer`, `spoken`. View with `grep live /data/.../events.jsonl` or browser console. Measured live on Atlas by the build agent 2026-11-01 (real Muse Spark Open + SAM3):
+
+| Stage | Measured |
+|-------|----------|
+| speech end → transcript | 2.0–2.7 s per utterance | Meta Muse Voice Transcribe |
+| transcript → answer | 5.6 s | whole answer visible about 8 s after end of speech, total 16 s from Live click in the test |
+| answer → spoken (first audio) | 0.8–1.2 s | `speak_ok` ms to first byte, engine alba 24 kHz PCM |
+
+Nginx `Permissions-Policy` now `camera=(self), microphone=(self)` in `operator/show-it-to-me-test.nginx.conf`. Verify with `operator/check-live-voice.py` and `operator/check-live-ask.py`.
+
+Prices: Meta ASR $0.18/audio hour; engine TTS internal.
 
 ## Known limits
 
