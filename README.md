@@ -2,7 +2,7 @@
 
 Private development repo for the Meta Global AI Developer Hackathon, Indie track. The repo stays private until Francisco authorises publication. The test site is behind the our earlier voice app login.
 
-Authored by Muse Glimmer at Francisco's request. Codex is directing and reviewing.
+Written by Muse Spark Open (Baseten seat) and several other AI coding agents.
 
 ## What it is
 
@@ -85,14 +85,22 @@ tail -f /data/project/logs/events.jsonl | python3 -m json.tool
 
 Meta style design. White cards, blue primary, rounded corners.
 
-* Camera selector: dropdown that lists deviceId values after permission, plus Back and Front quick buttons. Choice persists in localStorage and handles devicechange.
-* Gallery upload: Choose from gallery as fallback when camera is denied or busy.
-* Suggested questions: chips under the input.
-* Loading state: spinner with "Looking at the photo..." while the request is in flight.
+* Live camera preview starts on load. The video fills the camera card and auto starts with the saved facing or Back by default.
+* Camera choice is two buttons only: Back and Front. No dropdown, no Take photo, no Retake, no gallery buttons on screen. The old Take photo, Retake, gallery and Demo mode checkbox controls are hidden and not visible. Choice persists in localStorage and handles devicechange. Back uses facingMode environment, Front uses user. Switching stops the old stream.
+* One question box with no placeholder. It has aria-label Question. One Ask button captures the current frame, sends photo plus question to POST /api/analyze, freezes the frame, draws the highlight and shows the answer.
+* Suggested questions are chips under the input. Tapping a chip fills the box but does not send.
+* Editing the question or tapping the image returns to live preview. The frozen frame is cleared and the camera resumes.
+* Choose a photo link appears only when the camera cannot start. It opens the file picker as a fallback.
+* Retry button appears only after an error and resends the last request.
+* Loading state shows a spinner with "Looking at the photo..." while the request is in flight.
 * Tap to zoom: tap the preview or overlay to open a full screen zoom modal.
-* Retry: Retry button appears on error and re sends the last request. Retake clears the overlay.
+* Test hook: adding ?demo=1 to the URL enables the demo overlay. There is no Demo mode checkbox and no camera dropdown on screen.
 
 Privacy note in footer: images stay on device except for inference.
+
+## Verified live
+
+Verified live on 2026-11-01 by the build agent on the public site at 390x844 and 320x568. Fake camera showed the Pi 5 board, question typed, Ask clicked. Image 74 KB sent, answer and highlight returned in 11.4 s and 11.9 s. No console errors, no horizontal scroll. Checked with operator/check-live-ask.py. Not tested: a physical phone camera.
 
 ## Speed
 
@@ -119,6 +127,10 @@ node --check static/app.js
 ```
 
 The Python suite covers eventlog, server validation, SAM helpers, and the T03H and T03J cases.
+
+## Next: live mode
+
+Planned, not built. Voice question using Meta speech-to-text, auto capture when the question starts, scan-ahead cache of all parts, spoken answer. This will make the guide hands free. No code for this exists yet.
 
 ## Known limits
 
