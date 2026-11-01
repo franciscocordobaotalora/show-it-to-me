@@ -1,96 +1,140 @@
 # Show It To Me
 
-Private development repo for Meta Global AI Developer Hackathon — Indie Developer Track accepted. **PRIVATE until Francisco explicitly authorizes publication.**
+Private development repo for the Meta Global AI Developer Hackathon, Indie track. The repo stays private until Francisco authorises publication. The test site is behind the our earlier voice app login.
 
 Authored by Muse Glimmer at Francisco's request. Codex is directing and reviewing.
 
 ## What it is
 
-A still-frame first visual assistant that reasons over a real photo of hardware and overlays guidance on the original image.
+Show It To Me is a phone camera guide for a Raspberry Pi 5. You take a photo of the board and ask a question. The app highlights the relevant part on your photo and gives a short answer.
 
-First use case: Raspberry Pi 5 with fan, USB-C power supply, monitor cable, microSD. Exact real accessories need photos.
+Supported parts: fan header (the 4 pin FAN socket), USB-C power port, micro-HDMI x2 (two ports), microSD slot, and cooler fan.
 
-Flow: phone web app captures a photo; user asks/taps; Muse reasons with official references; SAM masks visible parts; SVG/canvas overlays labels/arrows on original photo. Ask for underside to locate microSD. Never claim to see hidden internals or verify electrical connections from inadequate views.
+Example: photo plus "Where does the power go?" returns a polygon on the USB-C port and a one or two sentence answer.
 
-Tracking stretch planned after still-frame.
+Stack: phone web app, Python HTTP API on Atlas, Muse for vision and language, SAM 3 for masks.
 
-## Architecture intent
+## Models
 
-Muse through Pi is the implementation worker. Codex reviews. SAM is a perception tool, not a code generator.
+Both Muse models are Meta open weight models.
 
-Intended runtime: BF16 Muse Glimmer 30B via authenticated vLLM server with tool roundtrip.
+* Muse Spark Open (`meta-models/muse-spark-open-1026`) served by Baseten for the language and vision steps. This is partner provided inference.
+* Muse Glimmer 30B BF16 on our own GPU is the fallback. It is the default when the Atlas file `secrets/backend` does not say `baseten`.
+* SAM 3 for the masks, on our GPU (card B on the Atlas box).
 
-## Access (31 October 2026)
+## Pipeline
 
-The [protected test app](https://show-it-to-me.experiment.franciscocordobaotalora.com/)
-now uses our earlier voice app's shared login. If signed out, sign in with the existing our earlier voice app
-account and 2-step; the login returns to this app. The former Basic Auth credentials
-no longer grant access. an earlier voice project's host-only cookie is separate from this shared
-experiment-domain session. Deployment configuration and checks are maintained in the
-parent workspace's `operator/TEST-DEPLOYMENT.md`.
+Six steps for each request:
 
-At the latest check, SAM3 was ready but Glimmer was stopped. A leased GPU-B window
-and a verified model response are required before testing image answers.
+1. Pass 1 with Muse: view (top, underside, unknown), targets (part, sam_prompt, box in 0..1000), answer (up to two sentences), and needs_view if the board must be flipped or moved closer.
+2. SAM text candidates: query SAM with prompts like "port" or "white connector" for each target.
+3. Choose by box overlap. If no match, ask Muse to pick a numbered candidate. If still no match, use a box prompt.
+4. Quality gate: drop low quality masks.
+5. Build polygons for the overlay.
+6. Optional second Muse call only if the answer is missing. Otherwise reuse the first answer.
 
-## Current status (October 27 build, historical test results)
+Validation enforces the reference pack and the needs_view rule for the microSD slot (underside).
 
-- BF16 Muse Glimmer 30B downloaded
-- Small text/vision smoke passed
-- Authenticated vLLM server and tool roundtrip tested
-- SAM3 environment imports present; SAM auth resolved, weights accessible
-- Phone-camera shell implemented with upload/retake/question flow, overlay renderer, frame/request contracts, stale-response protection
-- T01 public browser suite passes 8 tests; protected test URL https://show-it-to-me.experiment.franciscocordobaotalora.com/ (our earlier voice app session login since October 31)
-- T03H numbered candidate selection live, T03I speed fixes applied, T03J quality gate and docs updated
-- Real Muse+SAM end-to-end works, 20-50s per request
-
-## Run
+## Run and env
 
 ```bash
-MUSE_API_BASE=https://... MUSE_API_KEY=... SAM3_CHECKPOINT=/path/to/checkpoint SIT_PORT=8895 python -m server.server
+MUSE_API_BASE=https://... MUSE_API_KEY=... MUSE_MODEL=muse-spark-open-1026 SAM3_CHECKPOINT=/path/to/checkpoint SIT_PORT=8895 python -m server.server
 ```
 
-Env vars:
-- MUSE_API_BASE – vLLM base URL
-- MUSE_API_KEY – Bearer token
-- SAM3_CHECKPOINT – path to SAM3 weights
-- SIT_PORT – HTTP port
+Env variables:
 
-Request: POST /api/analyze with frameId, requestId, question, image data URL.
-Response fields: frameId, requestId, view, needs_view, regions, explanation, provenance with timings_ms and steps, selection and selection_debug per region.
+* `MUSE_API_BASE` - Baseten or vLLM base URL
+* `MUSE_API_KEY` - bearer token. Never write a key into the docs or repo.
+* `MUSE_MODEL` - model id to call
+* `MUSE_MIN_TOKENS` - room for reasoning. 3500 on Baseten so the model can think before returning JSON.
+* `MUSE_REASONING_IN_SYSTEM` - when set, puts "Reasoning strength: low" in the system message. Measured 6.1 s vs 11.1 s per call compared to the template kwarg.
+* `SAM3_CHECKPOINT` - path to SAM 3 weights
+* `SIT_PORT` - HTTP port, default 8895
+* `SIT_EVENT_LOG` - log file path, see Logging
 
-Pipeline: decode → pass1 → candidates → marks/sam → answer → overlay.
+Request is `POST /api/analyze` with frameId, requestId, question, and image as data URL. Response returns frameId, requestId, view, needs_view, regions with polygons and provenance with timings and selection debug.
 
-Tests:
+## Logging
+
+`server/eventlog.py` writes JSON lines to the file named by `SIT_EVENT_LOG`.
+
+* Default on the Atlas box: `/data/project/logs/events.jsonl`
+* Rotation at 20 MB, keeping 5 files (`.1` through `.5`)
+* Never logs image data, base64 payloads, API keys, tokens, or cookies. It logs only image_size and image_sha_prefix
+
+Events listed in the code: `server_start`, `sam_preload`, `http_request`, `http_request_body`, `http_rejection`, `glimmer_pass1`, `sam_candidates`, `selection`, `quality_gate`, `glimmer_pick`, `final`, `client_event`.
+
+APIs:
+
+* `GET /api/events?n=` - last n events, loopback only
+* `POST /api/client-event` - called from the page via beacon or fetch
+
+Find a request by requestId:
+
 ```bash
-python3 -m unittest discover -s server -p 'test_*.py'
+grep '"requestId":"<id>"' /data/project/logs/events.jsonl | python3 -m json.tool
+```
+
+Tail live:
+
+```bash
+tail -f /data/project/logs/events.jsonl | python3 -m json.tool
+```
+
+## Page
+
+Meta style design. White cards, blue primary, rounded corners.
+
+* Camera selector: dropdown that lists deviceId values after permission, plus Back and Front quick buttons. Choice persists in localStorage and handles devicechange.
+* Gallery upload: Choose from gallery as fallback when camera is denied or busy.
+* Suggested questions: chips under the input.
+* Loading state: spinner with "Looking at the photo..." while the request is in flight.
+* Tap to zoom: tap the preview or overlay to open a full screen zoom modal.
+* Retry: Retry button appears on error and re sends the last request. Retake clears the overlay.
+
+Privacy note in footer: images stay on device except for inference.
+
+## Speed
+
+Measured on 2026-11-01 through the real tunnel:
+
+* 9 to 17 s per request with Spark Open on Baseten
+* Was 27 to 44 s with Glimmer on our own card
+* SAM alone is 141 ms for four parts. Check with `server/sam_bench.py` via `operator/sam-bench.sh`
+* First request after a restart can take about 50 s (model and SAM warm up)
+
+## Tests
+
+Always run with `timeout`.
+
+```bash
+cd server && timeout 100 python3 -m unittest discover -s .
+# 44 tests, 1 skipped
+
 node --check static/app.js
+
+# Playwright fake camera test (fake MediaStream, mocked enumerateDevices, two fake devices cam1 and cam2)
+# See T04 receipt for the local runner: local-camera-check.js
+# Screenshots from the test are written to /tmp/screenshot-390x844.png, /tmp/screenshot-320x568.png, /tmp/screenshot-1280x800.png
 ```
 
-Known limits:
-- Stand-in Commons photos used, real phone untested
-- Glimmer always reasons, ~20-50s per request
-- Private repo, do not publish
+The Python suite covers eventlog, server validation, SAM helpers, and the T03H and T03J cases.
 
+## Known limits
 
-Model provenance revision cec94fcfd6512f2cfe708138c32533b346ea4f69 and runtime vLLM0.30.0.
+* Real phone camera not yet tested by the owner. Only stand in Commons photos used. See `fixtures/pi5/provenance.json` for the six source images and licenses.
+* Second Muse call is still sequential (only when answer is missing).
+* Glimmer long context quality untested.
+* Boards are photos only. The app does not verify electrical connections or that the Pi has booted.
 
-## Logs
+## Access and privacy
 
-Structured event log written by server/eventlog.py to file named by SIT_EVENT_LOG (default /data/project/logs/events.jsonl). Each line is JSON with ts ISO UTC with ms, event, requestId, frameId, level and fields. Rotation at 20 MB keeping 5 files. Never logs image data/base64/API keys/cookies; image byte size and sha256 prefix logged.
+* Private repo. Do not publish until Francisco says so.
+* Test URL https://show-it-to-me.experiment.franciscocordobaotalora.com/ is behind the our earlier voice app login. Sign in at our earlier voice app v1 with the existing account and 2 step. The shared experiment domain session opens the app. an earlier voice project host only session is separate.
+* No committed images or secrets. Env files and logs are not in git.
 
-Events: server_start, sam_preload, http_request, http_rejection, glimmer_pass1, sam_candidates, selection, quality_gate, glimmer_pick, final, client_event.
+## Operator notes
 
-Read live: `tail -f events.jsonl | python3 -m json.tool`
-Find a request: `grep '"requestId":"<id>"' events.jsonl | python3 -m json.tool`
-API: GET /api/events?n=100 (loopback only) returns last n events.
+Atlas project dir: `/data/project` on the Atlas box. Secrets file for backend choice: `secrets/backend` (contains `baseten` to use Baseten, otherwise Glimmer). Model provenance revision `cec94fcfd6512f2cfe708138c32533b346ea4f69`, runtime vLLM 0.30.0. Prior nginx config backup is `operator/show-it-to-me-test.vhost.bak-20261031`, live config is `operator/show-it-to-me-test.nginx.conf`.
 
-## Roadmap
-
-- Friday Oct30 build milestone
-- Internal submission target November 3, 2026
-
-## Privacy
-
-No committed images or secrets. Repo stays private. Do not publish.
-
-This README is intentionally minimal and factual.
+This README is intentionally short and factual.
