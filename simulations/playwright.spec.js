@@ -129,8 +129,7 @@ test.describe('Show It To Me T07 – One-step Ask flow', () => {
     // Voice-first: no Front/Back/Ask on main surface in design A
     const camBackVisible = await page.locator('#camBack').isVisible().catch(()=>false);
     // In V2 default design A, legacy Front/Back should not be on main surface (hidden via CSS)
-    // Hidden is acceptable; check that design switcher and hero are present
-    await expect(page.locator('#designPill')).toBeVisible();
+    // Design A single - no design switcher, only hero present
     await expect(page.locator('#heroLiveBtn')).toBeVisible();
     const h = await page.locator('#heroLiveBtn').evaluate(el=> parseFloat(getComputedStyle(el).height));
     expect(h).toBeGreaterThanOrEqual(56);

@@ -50,6 +50,46 @@ const levelBar = document.getElementById('levelBar');
 const stopBtn = document.getElementById('stopBtn');
 const transcriptBubble = document.getElementById('transcriptBubble');
 const subtitlesEl = document.getElementById('subtitles');
+// Design B Full screen elements (queried lazily or at init; keep references for sync)
+let videoB=null, canvasB=null, ctxB=null, previewB=null, loadingB=null, tapStartB=null, cameraFallbackB=null, cameraFallbackMsgB=null, fallbackUploadB=null;
+let bTranscriptBubble=null, bSubtitles=null, bStatePill=null, bStatusText=null, bStateIndicator=null, bLiveBtn=null, bLiveWrap=null, bLiveRing=null, bRingLevel=null, bRingArc=null, bLevelBar=null, bScanDot=null, bAnswerSheet=null, bAnswerText=null, bAnswerMeta=null, bAnswerSources=null, bAnswerChips=null, bSheetContent=null, bHighlightChipLayer=null, bKeyboardSheet=null, bQuestionInput=null, bSendBtn=null, bKeyboardBtn=null, bGalleryBtn=null, bFlipBtn=null, bMenuBtn=null, bLevelMeter=null;
+function initBRefs(){
+  videoB=document.getElementById('videoB');
+  canvasB=document.getElementById('overlayB'); ctxB=canvasB?canvasB.getContext('2d'):null;
+  previewB=document.getElementById('previewB');
+  loadingB=document.getElementById('loadingB');
+  tapStartB=document.getElementById('bTapStart');
+  cameraFallbackB=document.getElementById('cameraFallbackB');
+  cameraFallbackMsgB=document.getElementById('cameraFallbackMsgB');
+  fallbackUploadB=document.getElementById('fallbackUploadB');
+  bTranscriptBubble=document.getElementById('bTranscriptBubble');
+  bSubtitles=document.getElementById('bSubtitles');
+  bStatePill=document.getElementById('bStatePill');
+  bStatusText=document.getElementById('bStatusText');
+  bStateIndicator=document.getElementById('bStateIndicator');
+  bLiveBtn=document.getElementById('bLiveBtn');
+  bLiveWrap=document.getElementById('bLiveWrap');
+  bLiveRing=document.getElementById('bLiveRing');
+  bRingLevel=document.getElementById('bRingLevel');
+  bRingArc=document.getElementById('bRingArc');
+  bLevelBar=document.getElementById('bLevelBar');
+  bScanDot=document.getElementById('bScanDot');
+  bAnswerSheet=document.getElementById('bAnswerSheet');
+  bAnswerText=document.getElementById('bAnswerText');
+  bAnswerMeta=document.getElementById('bAnswerMeta');
+  bAnswerSources=document.getElementById('bAnswerSources');
+  bAnswerChips=document.getElementById('bAnswerChips');
+  bSheetContent=document.getElementById('bSheetContent');
+  bHighlightChipLayer=document.getElementById('bHighlightChipLayer');
+  bKeyboardSheet=document.getElementById('bKeyboardSheet');
+  bQuestionInput=document.getElementById('bQuestionInput');
+  bSendBtn=document.getElementById('bSendBtn');
+  bKeyboardBtn=document.getElementById('bKeyboardBtn');
+  bGalleryBtn=document.getElementById('bGalleryBtn');
+  bFlipBtn=document.getElementById('bFlipBtn');
+  bMenuBtn=document.getElementById('bMenuBtn');
+  bLevelMeter=document.querySelector('.b-level');
+}
 // Live audio state (an earlier voice project pattern)
 let liveEnabled = false;
 let liveCtx = null, liveStream = null, liveMicNode = null, liveSink = null, liveMaster = null, liveOutputEl = null, liveOutDest = null, liveSources = new Set();
@@ -97,8 +137,11 @@ function audioSession(type){ try{ if(navigator.audioSession) navigator.audioSess
 const demoFlag = (()=>{ try{ return new URLSearchParams(window.location.search).get('demo') === '1'; }catch(e){ return false; } })();
 const demoMode = { checked: demoFlag };
 
-// helpers
-function setStatus(s){ if(statusEl) statusEl.textContent = s; if(statusEl) statusEl.setAttribute('aria-live','polite'); }
+// helpers - single status line only, never duplicate sentence
+function collapseDuplicateWords(text){ if(!text) return text; return text.replace(/\b(\w+)\s+\1\b/gi, '$1'); }
+function setStatus(s){ const clean=collapseDuplicateWords(s); if(statusEl) statusEl.textContent = clean; if(statusEl) statusEl.setAttribute('aria-live','polite'); // sync single pill
+  try{ const sa=document.getElementById('statusA'); if(sa) sa.textContent=clean; }catch(e){}
+  try{ if(bStatusText) bStatusText.textContent = clean; }catch(e){} try{ const bLiveSt=document.getElementById('bLiveState'); if(bLiveSt) bLiveSt.textContent=clean; }catch(e){} }
 function sendClientEvent(eventName, detailObj){ try{ const payload = { event:eventName, detail: String(detailObj||'').slice(0,300), userAgent: navigator.userAgent.slice(0,160), viewport:{w:window.innerWidth,h:window.innerHeight}, online:navigator.onLine }; const body = JSON.stringify(payload); if(navigator.sendBeacon){ const blob = new Blob([body],{type:'application/json'}); navigator.sendBeacon('/api/client-event', blob); } else { fetch('/api/client-event',{method:'POST', headers:{'Content-Type':'application/json'}, body, keepalive:true}); } }catch(e){} }
 // Live helpers
 // State machine: ONE small state machine as required
@@ -109,8 +152,8 @@ function setAppState(next, detail){
   if(!APP_STATES.includes(next)) return;
   const prev = appState;
   appState = next;
-  // also update UI status line
-  try{ if(navigator.vibrate) navigator.vibrate(10); }catch(e){}
+  // also update UI status line - guard vibrate to never throw before user gesture
+  try{ if(typeof navigator.vibrate==='function'){ navigator.vibrate(10); } }catch(e){}
   // dispatch to listeners
   appStateListeners.forEach(fn=>{ try{ fn({state:next, prev, detail}); }catch(e){} });
   try{ document.documentElement.setAttribute('data-app-state', next); }catch(e){}
@@ -120,6 +163,29 @@ function setAppState(next, detail){
   if(statusEl){ statusEl.textContent = stateStatusText(next, detail); statusEl.setAttribute('aria-live','polite'); }
   // update body class for CSS per state
   try{ document.body.setAttribute('data-state', next); }catch(e){}
+  // Sync single pill #statusA + dot + animated indicator (bars while hearing/speaking, dots while thinking)
+  try{
+    const sa=document.getElementById('statusA'); if(sa) sa.textContent=stateStatusText(next, detail);
+    const dot=document.getElementById('stateDot'); if(dot){ const colors={idle:'var(--s-idle)',listening:'var(--s-listen)',hearing:'var(--s-hear)',thinking:'var(--s-think)',speaking:'var(--s-speak)',answer:'var(--s-answer)',error:'var(--s-error)',starting:'var(--s-listen)',permission_needed:'var(--s-idle)'}; dot.style.background=colors[next]||'var(--s-idle)'; }
+    const ind=document.getElementById('stateIndicator'); if(ind){
+      ind.className='state-indicator is-'+next;
+      if(next==='hearing'||next==='speaking') ind.innerHTML='<span class="bars"><i></i><i></i><i></i><i></i><i></i></span>';
+      else if(next==='thinking') ind.innerHTML='<span class="dots"><i></i><i></i><i></i></span>';
+      else ind.innerHTML='';
+    }
+    // heroLiveBtn toggle: blue Live with waveform glyph -> red Stop with square
+    const hero=document.getElementById('heroLiveBtn'); if(hero){ const active=['listening','hearing','thinking','speaking'].includes(next); hero.classList.toggle('active', active); hero.setAttribute('aria-label', active?'Stop live mode':'Start live mode'); const label=hero.querySelector('.live-label'); if(label) label.textContent=active?'Stop':'Live'; const glyph=hero.querySelector('.wave-glyph'); if(glyph) glyph.textContent=active?'■':'〰'; }
+    const wrap=document.getElementById('cameraWrap'); if(wrap){ if(next!=='idle' && (video && video.videoWidth || preview && !preview.hidden)) wrap.classList.add('has-frame'); }
+  }catch(e){}
+  // Design B top bar mirror
+  try{
+    if(typeof bStatusText!=='undefined' && bStatusText) bStatusText.textContent = stateStatusText(next, detail);
+    if(typeof bStateIndicator!=='undefined' && bStateIndicator){ bStateIndicator.className='b-state-indicator is-'+next; bStateIndicator.setAttribute('data-state', next); }
+    if(typeof bLiveBtn!=='undefined' && bLiveBtn){
+      if(liveEnabled && (next==='listening'||next==='hearing'||next==='thinking'||next==='speaking')){ bLiveBtn.textContent='Stop'; bLiveBtn.classList.add('is-active'); bLiveBtn.setAttribute('aria-label','Stop live mode'); }
+      else { bLiveBtn.textContent='Live'; bLiveBtn.classList.remove('is-active'); bLiveBtn.setAttribute('aria-label','Start live mode'); }
+    }
+  }catch(e){}
 }
 function onAppState(fn){ if(typeof fn==='function') appStateListeners.push(fn); }
 function getAppState(){ return appState; }
@@ -128,8 +194,8 @@ function stateLabel(s){
   return map[s]||s;
 }
 function stateStatusText(s, detail){
-  const map={idle:'Tap Live and ask about anything',starting:'Starting camera and mic…',listening:'Listening — speak naturally',hearing:'Hearing you…',thinking:'Thinking…',speaking:'Speaking…',answer:'Answer ready',error: detail||'Something went wrong',permission_needed:'Camera and microphone needed to see and answer'};
-  return map[s]||s;
+  const map={idle:'Tap Live to start',starting:'Starting camera and mic…',listening:'Listening...',hearing:'Hearing you...',thinking:'Thinking...',speaking:'Speaking...',answer:'Here is your answer',error:'Could not reach the model',permission_needed:'Camera and microphone needed'};
+  return map[s]||detail||s;
 }
 // expose state machine for view layer and tests
 window.AppState = { get: getAppState, set: setAppState, on: onAppState, STATES: APP_STATES, _label: stateLabel };
@@ -145,7 +211,19 @@ function setLiveState(s){ // backwards compat wrapper that also drives state mac
   else if(lower.includes('speaking')) setAppState('speaking', s);
   else if(lower.includes('idle')) setAppState('idle');
 }
-function updateLevelMeter(level){ if(levelBar) levelBar.style.width = Math.min(100, Math.round(level*300))+'%'; }
+function updateLevelMeter(level){
+  if(levelBar) levelBar.style.width = Math.min(100, Math.round(level*300))+'%';
+  if(bLevelBar) bLevelBar.style.width = Math.min(100, Math.round(level*300))+'%';
+  // Hearing ring follows voice level: scale 1 + level*0.3
+  try{
+    if(bRingLevel){
+      const sc = 1 + Math.min(0.5, level*0.9);
+      bRingLevel.style.transform = 'scale('+sc.toFixed(3)+')';
+      bRingLevel.style.opacity = level>0.02 ? '1' : '0.4';
+    }
+    const lb=document.getElementById('levelBarB'); if(lb) lb.style.width=Math.min(100, Math.round(level*300))+'%';
+  }catch(e){}
+}
 function logLatency(evt){ const ts = Date.now(); liveLatency[evt] = ts; try{ sendClientEvent(evt, String(ts)); }catch(e){} }
 function buildWavFromBlocks(blocks, sampleRate=16000){
   const total = blocks.reduce((a,b)=>a+b.length,0);
@@ -345,21 +423,57 @@ function liveFallbackTTS(text){
 }
 function makeFrameId(){ try{ return crypto.randomUUID(); }catch(e){ return 'f'+Math.random().toString(16).slice(2); } }
 function orientationFrom(w,h){ if(w>h) return 'landscape'; if(h>w) return 'portrait'; return 'square'; }
-function getActiveMedia(){ return (preview && !preview.hidden) ? preview : video; }
+function getActiveMedia(){
+  if(currentDesign==='b'){
+    if(previewB && !previewB.hidden) return previewB;
+    if(videoB && !videoB.hidden) return videoB;
+    // fallback: if B video hidden but main has stream, treat as active for capture purposes
+    if(previewB && previewB.src) return previewB;
+  }
+  return (preview && !preview.hidden) ? preview : video;
+}
 function syncOverlaySize(){
-  const media = getActiveMedia();
-  if(!media || media.hidden) return;
-  const rect = media.getBoundingClientRect();
-  let w=0,h=0;
-  if(media.tagName==='VIDEO'){ w=media.videoWidth||rect.width; h=media.videoHeight||rect.height; }
-  else { w=media.naturalWidth||rect.width; h=media.naturalHeight||rect.height; }
-  canvas.width=w; canvas.height=h;
-  canvas.style.width=rect.width+'px'; canvas.style.height=rect.height+'px';
+  // Sync main canvas
+  try{
+    const media = getActiveMedia();
+    if(media && !media.hidden){
+      const rect = media.getBoundingClientRect();
+      let w=0,h=0;
+      if(media.tagName==='VIDEO'){ w=media.videoWidth||rect.width; h=media.videoHeight||rect.height; } else { w=media.naturalWidth||rect.width; h=media.naturalHeight||rect.height; }
+      if(canvas && w && h){ canvas.width=w; canvas.height=h; canvas.style.width=rect.width+'px'; canvas.style.height=rect.height+'px'; }
+    }
+  }catch(e){}
+  // Sync B canvas separately
+  try{
+    const bMedia = (previewB && !previewB.hidden) ? previewB : videoB;
+    if(bMedia && !bMedia.hidden && canvasB){
+      const rect = bMedia.getBoundingClientRect();
+      let w=0,h=0;
+      if(bMedia.tagName==='VIDEO'){ w=bMedia.videoWidth||rect.width; h=bMedia.videoHeight||rect.height; } else { w=bMedia.naturalWidth||rect.width; h=bMedia.naturalHeight||rect.height; }
+      if(w&&h){ canvasB.width=w; canvasB.height=h; canvasB.style.width=rect.width+'px'; canvasB.style.height=rect.height+'px'; }
+    }
+  }catch(e){}
   if(lastRegions.length && lastFrame) drawRegions(lastRegions, lastFrame);
 }
 function updateCameraButtons(activeFacing){
   if(camBackBtn) camBackBtn.classList.toggle('active', activeFacing==='environment');
   if(camFrontBtn) camFrontBtn.classList.toggle('active', activeFacing==='user');
+  // flip camera icon only when more than one camera exists
+  try{
+    const flip=document.getElementById('cameraFlipBtn');
+    if(flip){ flip.setAttribute('data-facing', activeFacing); }
+    // enumerateDevices check async
+    if(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){
+      navigator.mediaDevices.enumerateDevices().then(devs=>{
+        const cams=devs.filter(d=>d.kind==='videoinput');
+        const flip2=document.getElementById('cameraFlipBtn');
+        if(flip2) flip2.hidden = cams.length<=1;
+        const placeholder=document.querySelector('.flip-placeholder');
+        if(placeholder) placeholder.hidden = cams.length>1;
+      }).catch(()=>{});
+    }
+  }catch(e){}
+  try{ if(typeof bFlipBtn!=='undefined' && bFlipBtn){ bFlipBtn.setAttribute('data-facing', activeFacing); if(typeof currentDesign!=='undefined' && currentDesign==='b') bFlipBtn.hidden=false; } }catch(e){}
 }
 // iOS capture guard: prevent blank/black frames, disable Ask until video has dimensions
 function isBlankImageData(imageData){
@@ -389,10 +503,12 @@ function updateAskEnabled(){
   if(enabled) askBtn.removeAttribute('aria-disabled');
   else askBtn.setAttribute('aria-disabled','true');
 }
-function showLoading(text){ if(loadingEl){ loadingEl.hidden=false; if(loadingTextEl) loadingTextEl.textContent=text; } }
-function hideLoading(){ if(loadingEl) loadingEl.hidden=true; }
-function clearOverlay(){ try{ ctx.clearRect(0,0,canvas.width,canvas.height); }catch(e){} }
-function clearAnswer(){ if(answerEl){ answerEl.innerHTML=''; answerEl.hidden=true; } }
+function showLoading(text){ if(loadingEl){ loadingEl.hidden=false; if(loadingTextEl) loadingTextEl.textContent=text; } try{ if(typeof loadingB!=='undefined' && loadingB){ loadingB.hidden=false; const lt=loadingB.querySelector('.loading-text'); if(lt) lt.textContent=text; } }catch(e){} }
+function hideLoading(){ if(loadingEl) loadingEl.hidden=true; try{ if(typeof loadingB!=='undefined' && loadingB) loadingB.hidden=true; }catch(e){} }
+function clearOverlay(){ try{ ctx.clearRect(0,0,canvas.width,canvas.height); }catch(e){} try{ if(typeof ctxB!=='undefined' && ctxB) ctxB.clearRect(0,0,canvasB.width,canvasB.height); }catch(e){} try{ if(typeof bHighlightChipLayer!=='undefined' && bHighlightChipLayer){ bHighlightChipLayer.innerHTML=''; bHighlightChipLayer.hidden=true; } }catch(e){} try{ const hc=document.getElementById('highlightChip'); if(hc) hc.hidden=true; }catch(e){} }
+function clearAnswer(){ if(answerEl){ answerEl.innerHTML=''; answerEl.hidden=true; } try{ if(typeof bAnswerSheet!=='undefined' && bAnswerSheet){ bAnswerSheet.hidden=true; bAnswerSheet.classList.remove('is-expanded','is-collapsed'); } if(typeof bAnswerText!=='undefined' && bAnswerText) bAnswerText.textContent=''; if(typeof bAnswerMeta!=='undefined' && bAnswerMeta) bAnswerMeta.textContent=''; if(typeof bAnswerSources!=='undefined' && bAnswerSources) bAnswerSources.innerHTML=''; if(typeof bAnswerChips!=='undefined' && bAnswerChips) bAnswerChips.innerHTML=''; if(typeof bSubtitles!=='undefined' && bSubtitles) bSubtitles.hidden=true; if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble) bTranscriptBubble.hidden=true; }catch(e){}
+  // clear A thread answer bubbles but keep transcript
+  try{ const thread=document.getElementById('designAThread'); if(thread){ thread.querySelectorAll('.bub.ai').forEach(el=>el.remove()); } const hc=document.getElementById('highlightChip'); if(hc) hc.hidden=true; }catch(e){} }
 
 // camera handling with Back/Front only, facingMode environment/user, localStorage inside try/catch
 async function startCamera(facing){
@@ -403,8 +519,8 @@ async function startCamera(facing){
   updateCameraButtons(facingMode);
   // stop old stream
   if(currentStream){ try{ currentStream.getTracks().forEach(t=>t.stop()); }catch(e){} currentStream=null; }
-  // hide fallback while trying
   if(cameraFallback) cameraFallback.hidden=true;
+  if(cameraFallbackB) cameraFallbackB.hidden=true;
   // guard navigator.mediaDevices (iOS missing without fallback)
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ throw new Error('mediaDevices not available'); }
   try{
@@ -424,33 +540,40 @@ async function startCamera(facing){
     }
     currentStream = stream;
     if(video){
-      video.srcObject = stream;
-      video.hidden = false;
-      // iOS guard: always playsinline muted autoplay (our earlier voice app pattern)
+      video.srcObject = stream; video.hidden = false;
       try{ video.setAttribute('playsinline',''); video.playsInline=true; video.muted=true; video.autoplay=true; }catch(e){}
-      try{ await video.play(); if(tapStart) tapStart.hidden=true; requestWakeLock(); audioSession('play-and-record'); }catch(playErr){ // autoplay blocked - show Tap to start camera (never black box)
-        if(tapStart){ tapStart.hidden=false; const btn=tapStart.querySelector('button'); if(btn) btn.onclick=async()=>{ try{ await video.play(); tapStart.hidden=true; requestWakeLock(); }catch(e){} updateAskEnabled(); }; }
-        setStatus('Tap to start camera');
-      }
+      try{ await video.play(); if(tapStart) tapStart.hidden=true; requestWakeLock(); audioSession('play-and-record'); }catch(playErr){ if(tapStart){ tapStart.hidden=false; const btn=tapStart.querySelector('button'); if(btn) btn.onclick=async()=>{ try{ await video.play(); tapStart.hidden=true; requestWakeLock(); }catch(e){} updateAskEnabled(); }; } setStatus('Tap to start camera'); }
+    }
+    if(videoB){
+      videoB.srcObject = stream; videoB.hidden=false;
+      try{ videoB.setAttribute('playsinline',''); videoB.playsInline=true; videoB.muted=true; videoB.autoplay=true; }catch(e){}
+      try{ await videoB.play(); if(tapStartB) tapStartB.hidden=true; }catch(e){ if(tapStartB){ tapStartB.hidden=false; const btn=tapStartB.querySelector('button'); if(btn) btn.onclick=async()=>{ try{ await videoB.play(); tapStartB.hidden=true; }catch(ex){} updateAskEnabled(); }; } }
     }
     // if we were frozen, go live now? Only on explicit switch, keep frozen? Spec says switching stops old and starts new one; we show live.
     if(isFrozen){
-      // switching should go back to live preview
       isFrozen=false;
       if(preview) preview.hidden=true;
+      if(previewB) previewB.hidden=true;
       if(video) video.hidden=false;
-      clearOverlay();
-      clearAnswer();
+      if(videoB) videoB.hidden=false;
+      clearOverlay(); clearAnswer();
       if(retryBtn) retryBtn.hidden=true;
       if(questionHint) questionHint.hidden=true;
     }
     if(video) video.hidden=false;
+    if(videoB) videoB.hidden=false;
     setStatus('Camera ready');
     sendClientEvent('camera_selected', facingMode==='environment' ? 'back' : 'front');
     if(cameraFallback) cameraFallback.hidden=true;
-    // enable Ask only after video has dimensions (guard against blank)
+    try{ if(typeof cameraFallbackB!=='undefined' && cameraFallbackB) cameraFallbackB.hidden=true; }catch(e){}
+    // hide skeleton
+    try{ const sk=document.getElementById('cameraSkeleton'); if(sk) sk.hidden=true; }catch(e){}
     updateAskEnabled();
-    // video may need time to get dimensions; listen for metadata
+    if(videoB){
+      const onReadyB=()=> updateAskEnabled();
+      videoB.addEventListener('loadedmetadata', onReadyB, {once:true});
+      videoB.addEventListener('canplay', onReadyB, {once:true});
+    }
     if(video){
       const onReady=()=> updateAskEnabled();
       video.addEventListener('loadedmetadata', onReady, {once:true});
@@ -471,23 +594,40 @@ async function startCamera(facing){
     else msg='Camera unavailable — you can still choose a photo';
     sendClientEvent('camera_error', name||String(e));
     setStatus(msg);
-    if(cameraFallback){
-      cameraFallback.hidden=false;
-      if(cameraFallbackMsg) cameraFallbackMsg.textContent = msg;
-    }
-    // if never had a frame, keep video hidden; otherwise keep preview if exists? But we hide video to show fallback
-    if(!isFrozen && preview && preview.hidden){
-      if(video) video.hidden=true;
-    }
+    if(cameraFallback){ cameraFallback.hidden=false; if(cameraFallbackMsg) cameraFallbackMsg.textContent=msg; }
+    if(cameraFallbackB){ cameraFallbackB.hidden=false; if(cameraFallbackMsgB) cameraFallbackMsgB.textContent=msg; }
+    if(!isFrozen && preview && preview.hidden){ if(video) video.hidden=true; }
+    if(!isFrozen && previewB && previewB.hidden){ if(videoB) videoB.hidden=true; }
     updateAskEnabled();
   }
 }
 
 // capture from live preview (video) or from fallback preview image
+function getBPreviewForCapture(){ try{ if(previewB && !previewB.hidden && previewB.src && (!currentStream || (videoB && videoB.hidden))) return previewB; }catch(e){} return null; }
 function captureLiveFrame(){
   return new Promise((resolve, reject)=>{
     // if frozen preview is visible and no video stream, use preview src (fallback upload)
     const usePreview = (preview && !preview.hidden && preview.src) && (!currentStream || (video && video.hidden));
+    const usePreviewB = (()=>{ try{ const p=getBPreviewForCapture(); return p && p.src; }catch(e){ return false; } })();
+    if(usePreviewB){
+      const bPrev = getBPreviewForCapture();
+      (async()=>{
+        try{
+          if(typeof createImageBitmap==='function'){
+            try{
+              const resp=await fetch(bPrev.src); const blob=await resp.blob();
+              const bmp=await createImageBitmap(blob,{imageOrientation:'from-image'});
+              const maxSide=1280; const scale=Math.min(1, maxSide/Math.max(bmp.width,bmp.height));
+              const cw=Math.round(bmp.width*scale), ch=Math.round(bmp.height*scale);
+              const c=document.createElement('canvas'); c.width=cw; c.height=ch; const cx=c.getContext('2d'); cx.drawImage(bmp,0,0,cw,ch); try{ bmp.close(); }catch(e){}
+              const dataUrl=c.toDataURL('image/jpeg',0.85); const b64=dataUrl.split(',')[1]||''; const bytes=Math.round(b64.length*3/4);
+              resolve({dataUrl, width:cw, height:ch, bytes}); return;
+            }catch(e){}
+          }
+          const img=new Image(); img.onload=()=>{ try{ const maxSide=1280; const w=img.naturalWidth||img.width, h=img.naturalHeight||img.height; const scale=Math.min(1, maxSide/Math.max(w,h)); const cw=Math.round(w*scale), ch=Math.round(h*scale); const c=document.createElement('canvas'); c.width=cw; c.height=ch; const cx=c.getContext('2d'); cx.drawImage(img,0,0,cw,ch); const dataUrl=c.toDataURL('image/jpeg',0.85); const b64=dataUrl.split(',')[1]||''; const bytes=Math.round(b64.length*3/4); resolve({dataUrl, width:cw, height:ch, bytes}); }catch(err){ reject(err); } }; img.onerror=()=>reject(new Error('image load failed')); try{ if(img.decode){ img.src=bPrev.src; await img.decode(); } else img.src=bPrev.src; }catch(e){ img.src=bPrev.src; }
+        }catch(err){ reject(err); }
+      })(); return;
+    }
 
     if(usePreview){
       // iOS gallery: handle EXIF orientation via createImageBitmap with imageOrientation from-image (our earlier voice app pattern), fallback to <img> decode
@@ -535,14 +675,15 @@ function captureLiveFrame(){
       })();
       return;
     }
-    // live video path
-    if(!video || !currentStream){
+    // live video path: prefer Design B video when active
+    let activeVideo = video;
+    try{ if(currentDesign==='b' && videoB && videoB.videoWidth) activeVideo = videoB; else if(currentDesign==='b' && videoB) activeVideo = videoB; }catch(e){}
+    if(!activeVideo || !currentStream){
       reject(new Error('no video'));
       return;
     }
-    // capture guard: need video dimensions, else blank
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
+    const vw = activeVideo.videoWidth;
+    const vh = activeVideo.videoHeight;
     if(!vw || !vh){
       reject(new Error('video_not_ready'));
       return;
@@ -554,7 +695,7 @@ function captureLiveFrame(){
     c.width=cw; c.height=ch;
     const cx=c.getContext('2d');
     try{
-      cx.drawImage(video,0,0,cw,ch);
+      cx.drawImage(activeVideo,0,0,cw,ch);
       // iOS blank/black frame guard
       try{
         const imgData = cx.getImageData(0,0, Math.min(cw,64), Math.min(ch,64));
@@ -581,13 +722,15 @@ function freezeFrame(dataUrl, width, height){
     src: 'camera'
   };
   pendingFrameId = currentFrame.frameId;
-  if(preview){
-    preview.src = dataUrl;
-    preview.hidden = false;
-  }
+  if(preview){ preview.src = dataUrl; preview.hidden = false; }
+  try{ if(typeof previewB!=='undefined' && previewB){ previewB.src = dataUrl; previewB.hidden = false; } }catch(e){}
   if(video) video.hidden = true;
+  try{ if(typeof videoB!=='undefined' && videoB) videoB.hidden = true; }catch(e){}
   isFrozen = true;
   requestAnimationFrame(syncOverlaySize);
+  // for A: clear highlight chip until drawRegions populates
+  try{ if(typeof bHighlightChipLayer!=='undefined' && bHighlightChipLayer) bHighlightChipLayer.hidden=true; }catch(e){}
+  try{ const hc=document.getElementById('highlightChip'); if(hc) hc.hidden=true; }catch(e){}
 }
 
 function resetToLive(){
@@ -596,13 +739,16 @@ function resetToLive(){
     // still check if we need to clear answer on edit? Only if was frozen
     // but spec says after answer, editing goes back to live preview, so we should reset if we have lastRegions shown
   }
-  if(isFrozen || (lastRegions.length>0) || (answerEl && !answerEl.hidden)){
+  if(isFrozen || (lastRegions.length>0) || (answerEl && !answerEl.hidden) || (bAnswerSheet && !bAnswerSheet.hidden)){
     isFrozen=false;
     if(preview) { preview.hidden=true; }
+    if(previewB) { previewB.hidden=true; }
     if(video && currentStream) video.hidden=false;
-    // if no stream but we have fallback, keep fallback?
+    if(videoB && currentStream) videoB.hidden=false;
     clearOverlay();
     clearAnswer();
+    // also clear B sheet
+    try{ if(bAnswerSheet) bAnswerSheet.hidden=true; if(bHighlightChipLayer){ bHighlightChipLayer.innerHTML=''; bHighlightChipLayer.hidden=true; } if(bTranscriptBubble) bTranscriptBubble.hidden=true; if(bSubtitles) bSubtitles.hidden=true; }catch(e){}
     if(retryBtn) retryBtn.hidden=true;
     if(questionHint) questionHint.hidden=true;
     lastRegions=[];
@@ -631,14 +777,12 @@ function captureFromFile(file){
   const img=new Image();
   img.onload=()=>{
     if(mySeq!==uploadSeq){ URL.revokeObjectURL(url); return; }
-    if(preview){
-      preview.src=url;
-      preview.hidden=false;
-    }
+    if(preview){ preview.src=url; preview.hidden=false; }
+    if(previewB){ previewB.src=url; previewB.hidden=false; }
     if(video) video.hidden=true;
-    // keep fallback visible or hide? Hide msg after selection, but keep link small
-    // we keep cameraFallback hidden after successful upload to show image
+    if(videoB) videoB.hidden=true;
     if(cameraFallback) cameraFallback.hidden=true;
+    if(cameraFallbackB) cameraFallbackB.hidden=true;
     // create a currentFrame for immediate use (but Ask will recapture)
     // still set frozen state so Ask knows to capture from preview
     isFrozen=true;
@@ -664,8 +808,82 @@ function captureFromFile(file){
   img.src=url;
 }
 
+function clearBOverlay(){ try{ if(ctxB) ctxB.clearRect(0,0,canvasB.width,canvasB.height); }catch(e){} }
+function drawToCanvas(targetCtx, targetCanvas, regions, frame){
+  const w=targetCanvas.width, h=targetCanvas.height;
+  if(!w||!h) return;
+  const toDraw=[]; regions.forEach(r=>{ if(r.status==='observed' && r.source==='sam3') toDraw.push(r); else if(r.status==='fallback_box') toDraw.push(r); });
+  const lineWidthOuter=Math.max(3, w*0.003); const lineWidthHalo=Math.max(1, w*0.0015);
+  toDraw.forEach(r=>{
+    const poly=r.polygon; if(!Array.isArray(poly)||poly.length<3) return;
+    targetCtx.beginPath(); poly.forEach((pt,i)=>{ const x=Math.max(0, Math.min(w, pt[0]*w)); const y=Math.max(0, Math.min(h, pt[1]*h)); if(i===0) targetCtx.moveTo(x,y); else targetCtx.lineTo(x,y); }); targetCtx.closePath();
+    const isFallback = r.status==='fallback_box';
+    // soft glow for B: shadowBlur, for A normal
+    const isB = targetCanvas===canvasB;
+    if(!isFallback){
+      if(isB){ targetCtx.shadowColor='rgba(255,98,0,0.9)'; targetCtx.shadowBlur=Math.max(12, w*0.018); }
+      targetCtx.fillStyle='rgba(255,98,0,0.32)'; targetCtx.fill();
+      if(isB){ targetCtx.shadowBlur=0; }
+    }
+    targetCtx.save(); if(isFallback) targetCtx.setLineDash([10,8]);
+    targetCtx.lineWidth=lineWidthHalo+lineWidthOuter; targetCtx.strokeStyle='rgba(255,255,255,0.65)'; targetCtx.stroke();
+    targetCtx.lineWidth=lineWidthOuter; targetCtx.strokeStyle='#ff6200'; targetCtx.stroke(); targetCtx.restore();
+    // label only on main canvas; B uses chip layer
+    if(!isB){
+      let cx=0,cy=0; poly.forEach(pt=>{ cx+=pt[0]; cy+=pt[1]; }); cx=cx/poly.length*w; cy=cy/poly.length*h;
+      const label=r.label||r.part||'region'; const pad=6; targetCtx.font='14px sans-serif'; const metrics=targetCtx.measureText(label); let lx=cx-metrics.width/2-pad; let ly=cy-40;
+      lx=Math.max(pad, Math.min(w-metrics.width-pad*2-pad, lx)); ly=Math.max(pad, Math.min(h-28-pad, ly));
+      targetCtx.fillStyle='rgba(0,0,0,0.85)'; targetCtx.fillRect(lx-pad, ly-pad, metrics.width+pad*2, 20+pad*2);
+      targetCtx.strokeStyle='#ff6200'; targetCtx.lineWidth=2; targetCtx.strokeRect(lx-pad, ly-pad, metrics.width+pad*2, 20+pad*2);
+      targetCtx.fillStyle='#fff'; targetCtx.fillText(label, lx, ly+14);
+      targetCtx.beginPath(); targetCtx.moveTo(cx,cy); targetCtx.lineTo(lx+metrics.width/2, ly); targetCtx.strokeStyle='#ff6200'; targetCtx.lineWidth=Math.max(2, w*0.002); targetCtx.stroke();
+    }
+  });
+  if(demoMode && demoMode.checked){ targetCtx.fillStyle='rgba(255,255,255,0.9)'; targetCtx.font='bold 16px sans-serif'; targetCtx.fillText('DEMO', 12, 24); }
+  targetCanvas.dataset.drawn=Date.now();
+}
 function drawRegions(regions, frame){
-  clearOverlay();
+  clearOverlay(); try{ if(typeof clearBOverlay==='function') clearBOverlay(); }catch(e){}
+  // draw to main canvas
+  if(canvas && canvas.width && canvas.height) drawToCanvas(ctx, canvas, regions, frame);
+  // draw to B canvas with glow if present
+  try{ if(typeof canvasB!=='undefined' && canvasB && typeof ctxB!=='undefined' && ctxB && canvasB.width && canvasB.height) drawToCanvas(ctxB, canvasB, regions, frame); }catch(e){}
+  // A highlight chip with white outline/blue glow + white label chip on FROZEN frame
+  try{
+    const hc=document.getElementById('highlightChip');
+    const wrap=document.getElementById('cameraWrap');
+    if(hc){
+      const toShow=(regions||[]).filter(r=> (r.status==='observed' && r.source==='sam3')||r.status==='fallback_box');
+      if(toShow.length && isFrozen){
+        const r=toShow[0];
+        hc.textContent=r.label||r.part||'Highlighted';
+        hc.hidden=false;
+        if(wrap){ wrap.classList.add('has-highlight'); wrap.classList.add('is-frozen'); }
+        // also show outline on canvas: add glow via wrap outline
+      } else { hc.hidden=true; if(wrap){ wrap.classList.remove('has-highlight'); if(!isFrozen) wrap.classList.remove('is-frozen'); } }
+    }
+  }catch(e){}
+  // B label chips overlay (legacy)
+  try{
+    if(typeof bHighlightChipLayer!=='undefined' && bHighlightChipLayer){
+      bHighlightChipLayer.innerHTML='';
+      if(regions && regions.length && frame){
+        const toShow = regions.filter(r=> (r.status==='observed' && r.source==='sam3')||r.status==='fallback_box');
+        toShow.forEach(r=>{
+          const poly=r.polygon; if(!Array.isArray(poly)||!poly.length) return;
+          let cx=0,cy=0; poly.forEach(pt=>{ cx+=pt[0]; cy+=pt[1]; }); cx/=poly.length; cy/=poly.length;
+          const chip=document.createElement('div'); chip.className='b-label-chip';
+          chip.textContent=r.label||r.part||'Highlighted';
+          chip.style.left=(cx*100)+'%'; chip.style.top=(cy*100)+'%';
+          chip.addEventListener('click', ()=>{ try{ if(previewB && !previewB.hidden) openZoom(previewB.src); else if(preview && !preview.hidden) openZoom(preview.src); }catch(e){} });
+          bHighlightChipLayer.appendChild(chip);
+        });
+        if(toShow.length) bHighlightChipLayer.hidden=false; else bHighlightChipLayer.hidden=true;
+      } else bHighlightChipLayer.hidden=true;
+    }
+  }catch(e){}
+  // return early; original w/h path handled above, keep for tests
+  return;
   const w=canvas.width, h=canvas.height;
   if(!w||!h) return;
   const toDraw=[];
@@ -734,8 +952,74 @@ function drawRegions(regions, frame){
   canvas.dataset.drawn=Date.now();
 }
 
+function renderAnswerB(data){
+  if(!bAnswerSheet || !bAnswerText) return;
+  let explanation=(data.explanation||'').replace(/\([a-z_]+\)/gi,'').replace(/\b[a-z]+_[a-z_]+\b/gi,'').replace(/\s+/g,' ').trim();
+  if(!explanation) explanation='Here is the highlighted part.';
+  bAnswerText.textContent = explanation;
+  if(bAnswerChips){
+    bAnswerChips.innerHTML='';
+    const regs=(data.regions||[]).filter(r=> r.status==='observed' && r.source==='sam3');
+    regs.forEach(r=>{ const chip=document.createElement('span'); chip.className='b-chip'; chip.textContent=r.label||r.part||'Highlighted'; bAnswerChips.appendChild(chip); });
+  }
+  if(bAnswerMeta){
+    bAnswerMeta.innerHTML='';
+    if(data.needs_view){
+      const msg=data.needs_view==='flip_board' ? 'Turn the board over so the underside faces the camera, then Ask again.' : data.needs_view==='closer' ? 'Move closer to the board so details are visible, then Ask again.' : '';
+      if(msg){ const d=document.createElement('div'); d.textContent=msg; d.style.color='#856404'; d.style.background='rgba(255,243,205,0.9)'; d.style.borderRadius='8px'; d.style.padding='6px 10px'; d.style.marginBottom='6px'; bAnswerMeta.appendChild(d); }
+    }
+    const prov=data.provenance||{}; const samModel=prov.sam_model; let samText='';
+    if(samModel==='sam_unavailable' || samModel==='sam_error') samText='SAM unavailable'; else samText='SAM3 mask';
+    const s=document.createElement('div'); s.textContent=samText+' • '; s.style.display='inline'; bAnswerMeta.appendChild(s);
+    const notFound=(data.regions||[]).filter(r=> r.source==='sam3' && r.status==='not_found');
+    if(notFound.length){ notFound.forEach(r=>{ const p=document.createElement('span'); p.textContent='Missing: '+(r.label||r.part||r.id)+' '; p.style.color='#D93025'; bAnswerMeta.appendChild(p); }); }
+  }
+  if(bAnswerSources){
+    bAnswerSources.innerHTML='';
+    if(Array.isArray(data.sources) && data.sources.length){ data.sources.forEach(url=>{ const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener'; a.textContent=url; bAnswerSources.appendChild(a); bAnswerSources.appendChild(document.createElement('br')); }); }
+  }
+  bAnswerSheet.hidden=false; bAnswerSheet.classList.remove('is-expanded'); bAnswerSheet.classList.add('is-collapsed');
+  setAppState('answer', explanation.slice(0,40));
+  // show frozen frame with glow (drawRegions already did)
+  // for B, transcript stays as subtitles, answer sheet slides up
+  try{ if(bSubtitles){ bSubtitles.textContent = explanation; bSubtitles.hidden=false; setTimeout(()=>{ if(bSubtitles && !bAnswerSheet.hidden) bSubtitles.hidden=true; }, 1200); } }catch(e){}
+}
 function renderAnswer(data){
-  if(!answerEl) return;
+  // also populate hidden #answer for Playwright compat
+  if(answerEl){ answerEl.innerHTML=''; answerEl.hidden=false; }
+  try{ if(typeof renderAnswerB!=='function'){ } else { renderAnswerB(data); } }catch(e){}
+  // Render into A thread: left-aligned white bubble with blue chips
+  try{
+    const thread=document.getElementById('designAThread');
+    if(thread){
+      const empty=document.getElementById('emptyState'); if(empty) empty.hidden=true;
+      const chipsEl=document.getElementById('suggestedChips'); if(chipsEl) chipsEl.hidden=true;
+      // remove any prior ai bubbles and thinking bubble
+      const prevThinking=thread.querySelector('.bub.thinking'); if(prevThinking) prevThinking.remove();
+      let ai=thread.querySelector('.bub.ai:last-of-type');
+      // create new ai bubble
+      ai=document.createElement('div'); ai.className='bub ai';
+      let explanation=(data.explanation||'').replace(/\([a-z_]+\)/gi,'').replace(/\b[a-z]+_[a-z_]+\b/gi,'').replace(/\s+/g,' ').trim();
+      if(!explanation) explanation='Here is the highlighted part.';
+      explanation=collapseDuplicateWords(explanation);
+      ai.textContent=explanation;
+      // add blue chips for regions
+      const regions=(data.regions||[]).filter(r=> r.status==='observed' && r.source==='sam3');
+      if(regions.length){ const chipRow=document.createElement('div'); chipRow.style.display='flex'; chipRow.style.flexWrap='wrap'; chipRow.style.gap='6px'; chipRow.style.marginTop='8px';
+        regions.forEach(r=>{ const c=document.createElement('span'); c.className='ai-chip'; c.textContent=r.label||r.part||'Highlighted'; chipRow.appendChild(c); });
+        ai.appendChild(chipRow);
+      }
+      if(data.needs_view){
+        const banner=document.createElement('div'); banner.style.color='#856404'; banner.style.background='#fff3cd'; banner.style.borderRadius='8px'; banner.style.padding='6px 8px'; banner.style.marginBottom='6px'; banner.style.fontSize='13px';
+        banner.textContent=data.needs_view==='flip_board'?'Turn the board over so the underside faces the camera, then Ask again.':data.needs_view==='closer'?'Move closer to the board so details are visible, then Ask again.':'';
+        ai.prepend(banner);
+      }
+      thread.appendChild(ai);
+      // error bubble with Try again chip - if error state will be handled separately
+      thread.scrollTop=thread.scrollHeight; setTimeout(()=>{ thread.scrollTop=thread.scrollHeight; }, 100);
+    }
+  }catch(e){}
+  if(!answerEl) { setAppState('answer'); return; }
   answerEl.innerHTML='';
   answerEl.hidden=false;
   if(data.needs_view){
@@ -794,7 +1078,14 @@ function renderAnswer(data){
 
 async function ask(){
   if(asking) return;
-  const q=(questionInput.value||'').trim();
+  let q='';
+  try{
+    // Design A single: check #question (bottom pill) then legacy #questionInput
+    const qEl=document.getElementById('question');
+    if(qEl && qEl.value && qEl.value.trim()) q=qEl.value.trim();
+    else if(questionInput && questionInput.value && questionInput.value.trim()) q=questionInput.value.trim();
+    else if(typeof bQuestionInput!=='undefined' && bQuestionInput && bQuestionInput.value) q=bQuestionInput.value.trim();
+  }catch(e){ try{ q=(questionInput.value||'').trim(); }catch(ex){} }
   if(!q){
     if(questionHint){
       questionHint.textContent='Please type a question first';
@@ -976,9 +1267,16 @@ if(canvas){
 
 // ------- Live mode (T10) -------
 function resetLiveLatency(){ liveLatency={}; }
-function showTranscript(text){ if(!transcriptBubble) return; transcriptBubble.textContent=text; transcriptBubble.hidden=false; }
-function showSubtitles(text){ if(!subtitlesEl) return; subtitlesEl.textContent=text; subtitlesEl.hidden=false; }
-function clearLiveBubbles(){ if(transcriptBubble) transcriptBubble.hidden=true; if(subtitlesEl) subtitlesEl.hidden=true; }
+function showTranscript(text){ const clean=collapseDuplicateWords(text); if(transcriptBubble){ transcriptBubble.textContent=clean; transcriptBubble.hidden=false; } try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble){ bTranscriptBubble.textContent=clean; bTranscriptBubble.hidden=false; } }catch(e){}
+  // also render into thread as right-aligned light-blue bubble
+  try{ const thread=document.getElementById('designAThread'); if(thread){ const empty=document.getElementById('emptyState'); if(empty) empty.hidden=true; let me=thread.querySelector('.bub.me'); if(!me){ me=document.createElement('div'); me.className='bub me'; thread.appendChild(me); } me.textContent=clean; me.hidden=false; // hide suggested chips after first question
+    const chips=document.getElementById('suggestedChips'); if(chips) chips.hidden=true;
+    thread.scrollTop=thread.scrollHeight; setTimeout(()=>{ thread.scrollTop=thread.scrollHeight; }, 100); }
+  }catch(e){} }
+function showSubtitles(text){ const clean=collapseDuplicateWords(text); if(subtitlesEl){ subtitlesEl.textContent=clean; subtitlesEl.hidden=false; } try{ if(typeof bSubtitles!=='undefined' && bSubtitles){ bSubtitles.textContent=clean; bSubtitles.hidden=false; } }catch(e){}
+  try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble && clean){ bTranscriptBubble.textContent=clean; bTranscriptBubble.hidden=false; } }catch(e){}
+}
+function clearLiveBubbles(){ if(transcriptBubble) transcriptBubble.hidden=true; if(subtitlesEl) subtitlesEl.hidden=true; try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble) bTranscriptBubble.hidden=true; if(typeof bSubtitles!=='undefined' && bSubtitles) bSubtitles.hidden=true; }catch(e){} }
 async function startLive(){
   if(liveEnabled) return;
   // user gesture required
@@ -1293,6 +1591,7 @@ if(chipsWrap){
 // camera buttons
 if(camBackBtn) camBackBtn.onclick=async ()=>{ await startCamera('environment'); };
 if(camFrontBtn) camFrontBtn.onclick=async ()=>{ await startCamera('user'); };
+const flipBtn=document.getElementById('cameraFlipBtn'); if(flipBtn) flipBtn.onclick=async ()=>{ const next=currentFacing==='environment'?'user':'environment'; await startCamera(next); };
 
 // handle device change: keep events
 if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
@@ -1385,15 +1684,15 @@ function applyDesign(d){
   updateDesignSpecificUI();
 }
 function updateDesignSpecificUI(){
-  // Voice-first: hide Front/Back/Ask on main surface for a,b,c ; show only in D classic
   const isClassic = currentDesign==='d';
   const camSelectWrap=document.getElementById('cameraSelectWrap');
   if(camSelectWrap) camSelectWrap.style.display = isClassic ? '' : 'none';
   const questionCard=document.querySelector('.question-card');
   if(questionCard) questionCard.style.display = isClassic ? '' : 'none';
-  // hero Live button always visible; ensure 56px+
   const hero=document.getElementById('heroLiveBtn');
   if(hero) hero.hidden=false;
+  try{ if(currentDesign==='b' && bFlipBtn) bFlipBtn.hidden=false; }catch(e){}
+  try{ if(bAnswerSheet && currentDesign!=='b') bAnswerSheet.hidden=true; }catch(e){}
 }
 // Design switcher pill interactions
 function initDesignSwitcher(){
@@ -1481,6 +1780,19 @@ function initPermissionScreen(){
     }
   });
 }
+function initMenuSheet(){
+  const btn=document.getElementById('menuBtn');
+  const sheet=document.getElementById('menuSheet');
+  const close=document.getElementById('menuClose');
+  const backdrop=document.getElementById('menuBackdrop');
+  if(!btn || !sheet) return;
+  const open=()=>{ sheet.hidden=false; btn.setAttribute('aria-expanded','true'); sheet.setAttribute('aria-hidden','false'); };
+  const hide=()=>{ sheet.hidden=true; btn.setAttribute('aria-expanded','false'); };
+  btn.addEventListener('click', open);
+  if(close) close.addEventListener('click', hide);
+  if(backdrop) backdrop.addEventListener('click', hide);
+  sheet.addEventListener('keydown', e=>{ if(e.key==='Escape') hide(); });
+}
 // Camera flip: only show when >1 camera exists
 async function updateCameraFlipVisibility(){
   const flipBtn=document.getElementById('cameraFlipBtn');
@@ -1539,28 +1851,111 @@ function initHeroLive(){
 // State indicator animation helpers (pulse, waveform, dots, bars)
 function initStateIndicators(){
   const indicator=document.getElementById('stateIndicator');
-  if(!indicator) return;
-  onAppState(({state})=>{
-    indicator.setAttribute('data-state', state);
-    indicator.className='state-indicator is-'+state;
-    // accessibility: aria-live already on statusEl, ensure indicator has aria-hidden
-  });
+  if(indicator) onAppState(({state})=>{ indicator.setAttribute('data-state', state); indicator.className='state-indicator is-'+state; });
+  // B indicator already mirrors via setAppState, but also init reduced-motion handling via CSS
 }
-// Gallery plus button
-function initGalleryPlus(){
-  const plus=document.getElementById('galleryPlusBtn');
-  const file=document.getElementById('file');
-  if(!plus || !file) return;
-  plus.addEventListener('click', ()=> file.click());
+function initDesignB(){
+  initBRefs();
+  // ensure flip visible when B active (override hidden attr from HTML)
+  try{ if(bFlipBtn) { bFlipBtn.hidden=false; bFlipBtn.style.display='flex'; } if(bMenuBtn) bMenuBtn.hidden=false; }catch(e){}
+  // keep flip visible after design switches
+  try{ onAppState(()=>{ if(currentDesign==='b' && bFlipBtn) { bFlipBtn.hidden=false; } }); }catch(e){}
+  try{
+    if(bKeyboardBtn && bKeyboardSheet){
+      bKeyboardBtn.addEventListener('click', ()=>{ bKeyboardSheet.hidden=!bKeyboardSheet.hidden; if(!bKeyboardSheet.hidden && bQuestionInput) setTimeout(()=>bQuestionInput.focus(), 80); });
+      // close when clicking outside? keep simple: second tap closes
+    }
+    if(bQuestionSend){
+      const doSend=()=>{
+        const q=(bQuestionInput.value||'').trim();
+        if(!q){ if(bQuestionInput){ bQuestionInput.focus(); }
+          return;
+        }
+        // sync to legacy input so ask() picks it up, then call ask
+        try{ if(questionInput) questionInput.value=q; }catch(e){}
+        bKeyboardSheet.hidden=true;
+        ask();
+      };
+      bQuestionSend.addEventListener('click', doSend);
+      if(bQuestionInput) bQuestionInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); doSend(); } });
+    }
+    if(bGalleryBtn){ const file=document.getElementById('file'); if(file) bGalleryBtn.addEventListener('click', ()=> file.click()); }
+    if(bFlipBtn){ bFlipBtn.addEventListener('click', async ()=>{ const next=currentFacing==='environment'?'user':'environment'; await startCamera(next); }); }
+    // suggested chips above Live bar - tap fills, disappear after first question
+    try{
+      const bChips=document.getElementById('bSuggestedChips');
+      if(bChips){
+        bChips.addEventListener('click', e=>{
+          const btn=e.target.closest('button[data-q]'); if(!btn) return;
+          const q=btn.getAttribute('data-q')||'';
+          if(bQuestionInput){ bQuestionInput.value=q; bKeyboardSheet.hidden=false; bQuestionInput.focus(); }
+          else if(questionInput) questionInput.value=q;
+          try{ sendClientEvent('suggested_tap', q.slice(0,80)); }catch(ex){}
+        });
+        // hide after first ask / transcript
+        onAppState(({state})=>{ if(state!=='idle' && bChips) bChips.hidden=true; if(state==='idle' && bChips && !bChips.hidden) { /* keep if never asked */ } });
+        const hideChipsOnce=()=>{ if(bChips) bChips.hidden=true; };
+        if(bQuestionSend) bQuestionSend.addEventListener('click', hideChipsOnce);
+        if(bQuestionInput) bQuestionInput.addEventListener('keydown', e=>{ if(e.key==='Enter') hideChipsOnce(); });
+      }
+    }catch(e){}
+    if(bMenuBtn){ bMenuBtn.addEventListener('click', ()=>{ const m=document.getElementById('designMenu'); if(m) m.hidden=!m.hidden; const p=document.getElementById('designPill'); if(p&&m) m.hidden=!m.hidden; // toggle via pill
+        // fallback: toggle menu
+        try{ const menu=document.getElementById('designMenu'); if(menu) menu.hidden=!menu.hidden; }catch(e){}
+      }); }
+    // answer sheet interactions
+    if(bAnswerSheet){
+      const handle=bAnswerSheet.querySelector('.b-sheet-handle');
+      bAnswerSheet.addEventListener('click', e=>{
+        // tap to expand: if collapsed and click not on close, expand
+        if(!bAnswerSheet.classList.contains('is-expanded') && !e.target.closest('.b-sheet-close')){ bAnswerSheet.classList.add('is-expanded'); bAnswerSheet.classList.remove('is-collapsed'); if(bSheetContent) bSheetContent.hidden=false; }
+      });
+      if(handle) handle.addEventListener('click', e=>{ e.stopPropagation(); if(bAnswerSheet.classList.contains('is-expanded')){ bAnswerSheet.classList.remove('is-expanded'); bAnswerSheet.classList.add('is-collapsed'); } else { bAnswerSheet.classList.add('is-expanded'); bAnswerSheet.classList.remove('is-collapsed'); } });
+      const closeBtn=bAnswerSheet.querySelector('.b-sheet-close'); if(closeBtn) closeBtn.addEventListener('click', e=>{ e.stopPropagation(); bAnswerSheet.hidden=true; bAnswerSheet.classList.remove('is-expanded'); // return to live
+        resetToLive(); });
+      // swipe down to dismiss
+      let startY=0; let dragging=false;
+      bAnswerSheet.addEventListener('touchstart', e=>{ if(!e.touches||!e.touches[0]) return; startY=e.touches[0].clientY; dragging=true; }, {passive:true});
+      bAnswerSheet.addEventListener('touchmove', e=>{ if(!dragging) return; const dy=e.touches[0].clientY - startY; if(dy>30) bAnswerSheet.style.transform='translateY('+dy+'px)'; }, {passive:true});
+      bAnswerSheet.addEventListener('touchend', e=>{ dragging=false; bAnswerSheet.style.transform=''; const dy=(e.changedTouches&&e.changedTouches[0]) ? e.changedTouches[0].clientY - startY : 0; if(dy>70){ bAnswerSheet.hidden=true; bAnswerSheet.classList.remove('is-expanded'); resetToLive(); } }, {passive:true});
+      // also enable sheet-content toggling tap expand
+      if(bSheetContent) bSheetContent.addEventListener('click', ()=>{
+        if(!bAnswerSheet.classList.contains('is-expanded')){ bAnswerSheet.classList.add('is-expanded'); bAnswerSheet.classList.remove('is-collapsed'); }
+      });
+    }
+    if(bLiveBtn){
+      bLiveBtn.addEventListener('click', async ()=>{
+        // toggle Live: reuse global liveEnabled flow from HeroLive but also handle B button
+        const topLive=document.getElementById('liveBtn'); // Design A liveBtn may not exist, but hook exists via hero
+        if(liveEnabled){ // turn off
+          try{ if(window.__stopLive) await window.__stopLive(); else { liveEnabled=false; setAppState('idle'); if(window.__liveStopHook) window.__liveStopHook(); } }catch(e){}
+          // also update B via setAppState already
+        } else {
+          // start via permission-screen or existing hero init
+          try{ const heroLive=document.getElementById('heroLiveBtn'); if(heroLive) heroLive.click(); else if(window.__startLive) await window.__startLive(); else { // fallback: start camera+mic minimal
+            await startCamera(currentFacing); liveEnabled=true; setAppState('listening'); } }catch(e){ setAppState('error', String(e.message||e)); }
+        }
+      });
+    }
+    // B video events
+    if(videoB){ videoB.addEventListener('loadedmetadata', syncOverlaySize); videoB.addEventListener('canplay', syncOverlaySize); videoB.addEventListener('click', ()=>{ if(isFrozen && bAnswerSheet && !bAnswerSheet.hidden){ // frozen: tap to zoom or go live
+        if(previewB && previewB.src) openZoom(previewB.src); } }); }
+    if(previewB){ previewB.addEventListener('click', ()=>{ if(previewB.src && !previewB.hidden) openZoom(previewB.src); if(isFrozen && bAnswerSheet && !bAnswerSheet.hidden){ bAnswerSheet.hidden=true; resetToLive(); } }); }
+    if(canvasB){ canvasB.addEventListener('click', ()=>{ if(isFrozen && previewB && previewB.src) openZoom(previewB.src); }); }
+  }catch(e){}
 }
+// Gallery plus button removed for Design A — no visible button
+function initGalleryPlus(){}
 // Init all V2 once DOM ready
 function initV2(){
-  initDesignSwitcher();
+  try{ initDesignSwitcher(); }catch(e){}
   initPermissionScreen();
+  initMenuSheet();
   initKeyboardToggle();
   initHeroLive();
   initStateIndicators();
   initGalleryPlus();
+  initDesignB();
   updateCameraFlipVisibility();
   if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
     navigator.mediaDevices.addEventListener('devicechange', updateCameraFlipVisibility);
@@ -1571,17 +1966,24 @@ function initV2(){
   window.addEventListener('simulate-state', e=>{
     const s=e.detail;
     const thread=document.getElementById('designAThread');
-    if(!thread) return;
-    if(s.state==='hearing' || s.state==='thinking' || s.state==='speaking' || s.state==='answer'){
-      thread.hidden=false;
-      const userBubble=thread.querySelector('.user-bubble');
-      const answerBubble=thread.querySelector('.assistant-bubble');
-      if(userBubble) userBubble.textContent = s.transcript||'';
-      if(answerBubble) answerBubble.textContent = s.answer||'';
-    } else if(s.state==='idle'){
-      // show empty state
-      thread.hidden=false;
+    if(thread){
+      if(s.state==='hearing' || s.state==='thinking' || s.state==='speaking' || s.state==='answer'){
+        thread.hidden=false;
+        const userBubble=thread.querySelector('.user-bubble');
+        const answerBubble=thread.querySelector('.assistant-bubble');
+        if(userBubble) userBubble.textContent = s.transcript||'';
+        if(answerBubble) answerBubble.textContent = s.answer||'';
+      } else if(s.state==='idle'){ thread.hidden=false; }
     }
+    // Also mirror to Design B subtitles/sheet
+    try{
+      if(s.transcript && bTranscriptBubble){ bTranscriptBubble.textContent=s.transcript; bTranscriptBubble.hidden=false; }
+      else if(bTranscriptBubble && (s.state==='idle'||s.state==='listening')) bTranscriptBubble.hidden=true;
+      if(s.state==='speaking' && bSubtitles && s.answer){ bSubtitles.textContent=s.answer; bSubtitles.hidden=false; }
+      if(s.state==='answer' && s.answer){ if(bAnswerText) bAnswerText.textContent=s.answer; if(bAnswerSheet) { bAnswerSheet.hidden=false; bAnswerSheet.classList.remove('is-expanded'); bAnswerSheet.classList.add('is-collapsed'); } }
+      if(s.state==='idle'){ if(bAnswerSheet) bAnswerSheet.hidden=true; }
+      if(s.regions && s.regions.length){ lastRegions=s.regions.map((r,i)=>({id:'sim'+i, polygon:r.polygon, bbox:[0.12,0.45,0.18,0.6], score:0.9, status:'observed', source:'sim'})); lastFrame={width:640,height:480}; try{ drawRegions(lastRegions, lastFrame); }catch(e){} }
+    }catch(e2){}
   });
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', initV2); else initV2();

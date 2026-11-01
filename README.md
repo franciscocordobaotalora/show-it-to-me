@@ -203,4 +203,8 @@ Prices: Meta ASR $0.18/audio hour; engine TTS internal.
 
 Atlas project dir: `/data/project` on the Atlas box. Secrets file for backend choice: `secrets/backend` (contains `baseten` to use Baseten, otherwise Glimmer). Model provenance revision `cec94fcfd6512f2cfe708138c32533b346ea4f69`, runtime vLLM 0.30.0. Prior nginx config backup is `operator/show-it-to-me-test.vhost.bak-20261031`, live config is `operator/show-it-to-me-test.nginx.conf`.
 
+## Built locally, served with hosted keys
+
+We developed and measured everything locally on our own hardware (a local SAM 3 on a GPU, the local Muse Glimmer test bench, our own benchmarks and numbers). The live site serves it with hosted keys: Muse Spark Open on Baseten, and the Meta Model API for speech to text (Muse Voice Transcribe) and soon SAM 3.1. No key appears in the repo.
+
 This README is intentionally short and factual.
