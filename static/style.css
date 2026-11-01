@@ -109,6 +109,7 @@ img,video,canvas{max-width:100%;box-sizing:border-box}
 .camera-skeleton .skeleton-wave{width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.06)}
 @keyframes skeleton{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .camera-wrap.has-frame .camera-skeleton{display:none}
+.camera-skeleton[hidden]{display:none!important}
 .highlight-chip{position:absolute;transform:translate(-50%,-100%);background:#E7F0FF;color:#0A52CC;border-radius:999px;padding:4px 10px;font-size:13px;font-weight:700;line-height:1;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.15);z-index:3;pointer-events:none;max-width:90%;overflow:hidden;text-overflow:ellipsis}
 .flip-btn{position:absolute;right:12px;top:12px;width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.45);color:#fff;display:grid;place-items:center;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:0;z-index:4}
 .flip-btn[hidden]{display:none!important}
