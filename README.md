@@ -18,11 +18,19 @@ Stack: phone web app, Python HTTP API on Atlas, Muse for vision and language, SA
 
 ## Models
 
-Both Muse models are Meta open weight models.
+Every model in this project, what it did, and where it ran. Both Muse open-weight models are Meta models; the list is complete.
 
-* Muse Spark Open (`meta-models/muse-spark-open-1026`) served by Baseten for the language and vision steps. This is partner provided inference.
-* Muse Glimmer 30B BF16 on our own GPU is the fallback. It is the default when the Atlas file `secrets/backend` does not say `baseten`.
-* SAM 3 for the masks, on our GPU (card B on the Atlas box).
+| Model | Where it ran | Job |
+|---|---|---|
+| Muse Glimmer 30B (BF16, open weight) | Our own GPU (RTX PRO 6000, card B) | The first test bench: every early measurement and the first answers ran on it, locally |
+| SAM 3 (open weight) | Our own GPU, local | Cuts the exact shape of the part out of the photo (the highlight). Measured at 141 ms for four parts |
+| Muse Spark Open (`meta-models/muse-spark-open-1026`, open weight) | Baseten (hackathon partner inference) | The coding agent that wrote most of the app (about 1,500 steps), and the photo answers for a day until the credit ran out |
+| Muse Voice Transcribe (`muse-voice-transcribe-1.0`) | Meta Model API, called with our key | Turns the spoken question into text |
+| Muse Spark 1.3 (`muse-spark-1.3`) | Meta Model API, called with our key | Reads the photo and the question and writes the answer. In use since 2026-11-01, after the Baseten credit ran out |
+| SAM 3.1 (`sam-3.1`) | Meta Model API, called with our key | Planned replacement for the local SAM 3 so no GPU is needed to serve the app |
+| Speech engine (CPU) | Our own server | Speaks the answer aloud |
+
+How we built it: we developed and measured everything locally on our own hardware (local Glimmer and SAM 3, our own benchmarks and numbers), then moved the live serving to hosted keys. The live site only needs API keys, no GPU. The prize rules ask for Meta open-weight models, so the open-weight ones (Glimmer, Spark Open, SAM 3) are the ones we developed, measured and coded with, and the README says plainly which hosted model answers today.
 
 ## Pipeline
 
