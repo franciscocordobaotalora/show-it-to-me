@@ -209,3 +209,90 @@ img, video, canvas{max-width:100%;box-sizing:border-box}
 select, input, button{max-width:100%;box-sizing:border-box}
 * {min-width:0}
 .container, .card{overflow-x:hidden;word-wrap:break-word}
+
+/* ===== V2 Design System: shared voice-first rules ===== */
+.design-switcher{position:fixed;top:calc(8px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));z-index:1000;}
+.design-pill{height:44px;min-width:44px;padding:0 16px;border-radius:999px;background:#1C1E21;color:#fff;border:1px solid rgba(0,0,0,0.08);font-size:13px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.15);cursor:pointer;}
+.design-pill:focus-visible{outline:3px solid #0866FF;outline-offset:2px;}
+.design-menu{background:#fff;border:1px solid #DADDE1;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:8px;min-width:200px;}
+.design-menu-item{width:100%;text-align:left;padding:12px 12px;border-radius:12px;border:none;background:#fff;color:#1C1E21;font-size:14px;cursor:pointer;min-height:48px;}
+.design-menu-item:hover{background:#F0F2F5;}
+.design-menu-item:focus-visible{outline:3px solid #0866FF;outline-offset:2px;}
+/* Permission screen */
+.permission-screen[hidden]{display:none !important;}
+.permission-card{animation:fadeIn 180ms ease;}
+/* Hero Live button 56px+ thumb zone */
+.hero-live-btn{min-width:56px;min-height:56px;height:56px;padding:0 18px;border-radius:999px;background:#0866FF;color:#fff;border:none;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:6px;box-shadow:0 4px 12px rgba(8,102,255,0.3);cursor:pointer;touch-action:manipulation;}
+.hero-live-btn.is-active{background:#D93025;}
+.hero-live-btn:focus-visible{outline:3px solid #0866FF;outline-offset:2px;}
+.circle-btn{width:48px;height:48px;min-width:48px;min-height:48px;border-radius:50%;background:#F0F2F5;border:1px solid #DADDE1;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;}
+.circle-btn:focus-visible{outline:3px solid #0866FF;outline-offset:2px;}
+/* ensure touch targets at least 48px - override for .btn, chips, etc */
+button, [role=button]{min-height:48px;min-width:48px;}
+.chip{min-height:48px;padding:8px 16px;}
+/* Focus rings */
+*:focus-visible{outline:3px solid #0866FF;outline-offset:2px;}
+/* State indicator colours per state */
+.state-indicator{width:10px;height:10px;border-radius:50%;display:inline-block;transition:background 180ms ease, transform 180ms ease;}
+.state-indicator.is-idle{background:#606770;}
+.state-indicator.is-starting{background:#FFC107;}
+.state-indicator.is-listening{background:#0866FF;animation:pulse 1.2s infinite;}
+.state-indicator.is-hearing{background:#00A676;animation:wave 0.6s infinite;}
+.state-indicator.is-thinking{background:#FF8A00;animation:spin 1s linear infinite;}
+.state-indicator.is-speaking{background:#0866FF;animation:bars 0.5s infinite;}
+.state-indicator.is-answer{background:#1FAA59;}
+.state-indicator.is-error{background:#D93025;}
+.state-indicator.is-permission_needed{background:#D93025;}
+/* State pill colour per state */
+[data-state="listening"] .state-pill{background:#E7F0FF;color:#0866FF;}
+[data-state="hearing"] .state-pill{background:#E6F4EA;color:#1FAA59;}
+[data-state="thinking"] .state-pill{background:#FFF3E0;color:#E65100;}
+[data-state="speaking"] .state-pill{background:#E7F0FF;color:#0866FF;}
+[data-state="error"] .state-pill{background:#FCE8E6;color:#D93025;}
+/* Animations only on transform and opacity */
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.2);opacity:0.85}}
+@keyframes wave{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.4)}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes bars{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.5)}}
+/* shimmer while thinking */
+[data-state="thinking"] .camera-card{position:relative;overflow:hidden;}
+[data-state="thinking"] .camera-card::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.4),transparent);transform:translateX(-100%);animation:shimmer 1.2s infinite;}
+@keyframes shimmer{100%{transform:translateX(100%)}}
+/* prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce){
+  .state-indicator, .permission-card, .camera-card::after{animation:none !important;}
+  *{transition:none !important;}
+}
+/* prefers-color-scheme dark */
+@media (prefers-color-scheme: dark){
+  .design-menu{background:#242526;border-color:#3E4042;}
+  .design-menu-item{background:#242526;color:#E4E6EB;}
+  .design-menu-item:hover{background:#3A3B3C;}
+  .permission-screen{background:#18191A !important;}
+  .permission-card{background:#242526 !important;color:#E4E6EB;}
+}
+/* safe-area insets, 100dvh, no horizontal scroll */
+html,body{height:100%;min-height:100vh;min-height:100dvh;}
+body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);max-width:100vw;overflow-x:hidden;}
+.container{max-width:720px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px;}
+/* 8px grid, 16/24 radii, system font stack, type scale 13/15/17/22 */
+.design-a-root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.design-a-topbar{background:#fff;border-bottom:1px solid #DADDE1;padding:12px 16px;padding-top:max(12px, env(safe-area-inset-top));position:sticky;top:0;z-index:10;}
+.design-a-topbar-inner{display:flex;align-items:center;gap:12px;}
+.design-a-camera-card{border-radius:24px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.08);border:1px solid #E4E6EB;}
+.design-a-container .camera-wrap{border-radius:24px;overflow:hidden;aspect-ratio:4/3;min-height:220px;background:#000;}
+.design-a-container .thread{padding:8px 0;}
+.design-a-container .user-bubble{background:#E7F0FF;color:#1C1E21;border-radius:18px 18px 4px 18px;}
+.design-a-container .assistant-bubble{background:#F0F2F5;color:#1C1E21;border-radius:18px 18px 18px 4px;}
+.design-a-container .empty-state{font-size:15px;line-height:1.4;}
+/* Floating bottom pill */
+.bottom-pill{position:fixed;bottom:calc(12px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:20;background:#fff;border:1px solid #DADDE1;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:8px;display:flex;align-items:center;gap:8px;max-width:calc(100vw - 24px);width:360px;}
+.bottom-pill:focus-within{box-shadow:0 8px 24px rgba(0,0,0,0.16);}
+/* No layout shift when states change */
+.status-line{min-height:24px;}
+.thread .bubble{transition:transform 180ms ease, opacity 180ms ease;}
+/* Ensure no horizontal scroll at test widths */
+body, .container, .card, .camera-wrap, .controls, .camera-select, .chips{max-width:100%;box-sizing:border-box;}
+img, video, canvas{max-width:100%;box-sizing:border-box;}
+select, input, button{max-width:100%;box-sizing:border-box;}
+

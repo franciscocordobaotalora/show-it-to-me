@@ -11,28 +11,46 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<header class="topbar">
-  <div class="topbar-inner">
-    <h1>Show It To Me</h1>
-    <p class="subtitle">Point your camera at anything and ask.</p>
+<!-- Fixed floating Design pill top right 44px always above everything -->
+<div id="designSwitcher" class="design-switcher" style="position:fixed;top:calc(8px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));z-index:1000;">
+  <button id="designPill" type="button" class="design-pill" aria-label="Switch design" aria-haspopup="menu" aria-expanded="false" style="height:44px;min-width:44px;padding:0 16px;border-radius:999px;background:#1C1E21;color:#fff;border:1px solid rgba(0,0,0,0.08);font-size:13px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.15);">Design A</button>
+  <div id="designMenu" class="design-menu" hidden role="menu" aria-label="Design choices" style="position:absolute;top:48px;right:0;background:#fff;border:1px solid #DADDE1;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:8px;min-width:200px;">
+    <button data-design="a" role="menuitem" class="design-menu-item" type="button">A Conversation</button>
+    <button data-design="b" role="menuitem" class="design-menu-item" type="button">B Full screen</button>
+    <button data-design="c" role="menuitem" class="design-menu-item" type="button">C Orb</button>
+    <button data-design="d" role="menuitem" class="design-menu-item" type="button">D Classic</button>
+    <hr style="border:none;border-top:1px solid #eee;margin:8px 0;">
+    <button id="simulateBtn" role="menuitem" type="button" class="design-menu-item">Simulate states</button>
   </div>
-  <p class="status" id="status" role="status" aria-live="polite">Ready</p>
+</div>
+
+<!-- First-run permission screen BEFORE browser prompt -->
+<div id="permissionScreen" class="permission-screen" hidden role="dialog" aria-modal="true" aria-label="Permission needed" style="position:fixed;inset:0;z-index:900;background:#F0F2F5;display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div class="permission-card" style="background:#fff;border-radius:24px;padding:24px;max-width:360px;width:100%;box-shadow:0 8px 24px rgba(0,0,0,0.12);text-align:center;">
+    <div style="width:56px;height:56px;border-radius:50%;background:#E7F0FF;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px;" aria-hidden="true">◎</div>
+    <h2 style="margin:0 0 8px;font-size:17px;font-weight:700;">Camera and microphone needed</h2>
+    <p id="permissionMsg" style="margin:0 0 16px;font-size:15px;color:#606770;line-height:1.4;">We need camera and microphone to see what you're asking about and answer by voice.</p>
+    <button id="permissionBtn" type="button" class="btn btn-primary" style="width:100%;min-height:48px;border-radius:999px;background:#0866FF;color:#fff;border:none;font-size:15px;font-weight:600;">Continue</button>
+  </div>
+</div>
+
+<!-- DESIGN A : Conversation (default) -->
+<div data-design-section="a" class="design-a-root">
+<header class="topbar design-a-topbar">
+  <div class="topbar-inner design-a-topbar-inner">
+    <button type="button" class="circle-btn" aria-label="Menu" style="width:40px;height:40px;border-radius:50%;background:#F0F2F5;border:1px solid #DADDE1;display:flex;align-items:center;justify-content:center;font-size:16px;">☰</button>
+    <div class="center-pill" aria-live="polite" style="flex:1;display:flex;align-items:center;justify-content:center;">
+      <div class="state-pill" id="statePillA" style="background:#E7F0FF;color:#0866FF;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
+        <span id="stateIndicator" class="state-indicator is-idle" aria-hidden="true" style="width:10px;height:10px;border-radius:50%;background:#0866FF;display:inline-block;"></span>
+        <span id="statusA" role="status" aria-live="polite">Tap Live and ask about anything</span>
+      </div>
+    </div>
+    <button id="cameraFlipBtn" type="button" class="circle-btn" aria-label="Flip camera" hidden style="width:40px;height:40px;border-radius:50%;background:#F0F2F5;border:1px solid #DADDE1;display:flex;align-items:center;justify-content:center;font-size:16px;">⇄</button>
+  </div>
 </header>
-<main class="container">
-  <section class="card camera-card">
-    <div class="camera-select" id="cameraSelectWrap">
-      <button id="camBack" type="button" class="btn btn-chip" aria-label="Back camera">Back</button>
-      <button id="camFront" type="button" class="btn btn-chip" aria-label="Front camera">Front</button>
-      <button id="liveToggle" type="button" class="btn btn-live" aria-label="Live voice mode"><span class="mic-icon" aria-hidden="true">🎙</span> Live</button>
-    </div>
-    <div id="liveBar" class="live-bar" hidden aria-live="polite">
-      <span id="liveState" class="live-state">Listening</span>
-      <div id="levelMeter" class="level-meter" aria-hidden="true"><div id="levelBar" class="level-bar" style="width:0%"></div></div>
-      <button id="stopBtn" type="button" class="btn btn-stop" hidden>Stop</button>
-      <span id="scanReadyDot" class="scan-ready-dot" hidden title="Ready — scene pre-scanned">● Ready</span>
-    </div>
-    <div id="transcriptBubble" class="transcript-bubble" hidden></div>
-    <div id="subtitles" class="subtitles" hidden></div>
+<main class="container design-a-container">
+  <!-- Rounded camera card with highlight -->
+  <section class="card camera-card design-a-camera-card">
     <div class="camera-wrap" id="cameraWrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="overlay"></canvas>
@@ -50,41 +68,137 @@
       <p id="cameraFallbackMsg" class="fallback-msg"></p>
       <button id="fallbackUpload" type="button" class="fallback-link">Choose a photo</button>
     </div>
-    <!-- gallery fallback input, kept for hidden test compatibility -->
-    <input type="file" id="file" accept="image/*" hidden />
-    <!-- hidden legacy controls: no dead controls on screen, kept for test hook compatibility -->
-    <div hidden aria-hidden="true">
-      <button id="capture" type="button">Take photo</button>
-      <button id="retake" type="button">Retake</button>
-      <button id="upload" type="button">Choose from gallery</button>
-      <select id="cameraSelect" hidden></select>
-      <input type="checkbox" id="demoMode" hidden />
+    <div class="status-line" style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+      <p class="status" id="status" role="status" aria-live="polite" style="margin:0;flex:1;">Tap Live and ask about anything</p>
+      <div id="levelMeter" class="level-meter" aria-hidden="true" style="width:60px;height:6px;background:#E4E6EB;border-radius:999px;overflow:hidden;"><div id="levelBar" class="level-bar" style="width:0%;height:100%;background:#0866FF;"></div></div>
+    </div>
+    <div id="liveBar" class="live-bar" hidden aria-live="polite">
+      <span id="liveState" class="live-state">Listening</span>
+      <button id="stopBtn" type="button" class="btn btn-stop" hidden>Stop</button>
+      <span id="scanReadyDot" class="scan-ready-dot" hidden title="Ready — scene pre-scanned">● Ready</span>
+    </div>
+    <div id="transcriptBubble" class="transcript-bubble" hidden></div>
+    <div id="subtitles" class="subtitles" hidden></div>
+  </section>
+
+  <!-- Thread with bubbles -->
+  <section id="designAThread" class="thread" aria-live="polite" style="display:flex;flex-direction:column;gap:12px;">
+    <div class="empty-state" id="emptyState" style="text-align:center;padding:24px;background:#fff;border-radius:16px;border:1px dashed #DADDE1;color:#606770;font-size:15px;">Tap Live and ask about anything</div>
+    <div class="bubble user-bubble" hidden style="align-self:flex-end;max-width:80%;background:#E7F0FF;color:#1C1E21;padding:12px 16px;border-radius:18px 18px 4px 18px;font-size:15px;line-height:1.4;"></div>
+    <div class="bubble assistant-bubble" hidden style="align-self:flex-start;max-width:80%;background:#F0F2F5;color:#1C1E21;padding:12px 16px;border-radius:18px 18px 18px 4px;font-size:15px;line-height:1.5;"></div>
+    <div id="suggestedChips" class="chips" role="group" aria-label="Suggested questions" style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="chip" type="button" data-q="What is this?">What is this?</button>
+      <button class="chip" type="button" data-q="Where does this go?">Where does this go?</button>
+      <button class="chip" type="button" data-q="How does this work?">How does this work?</button>
     </div>
   </section>
 
+  <!-- Hidden answer element for legacy tests (kept) -->
+  <div id="answer" class="answer card" hidden></div>
+  <div id="questionHint" class="hint" hidden></div>
+
+  <!-- Floating bottom pill -->
+  <div class="bottom-pill" style="position:fixed;bottom:calc(12px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:20;background:#fff;border:1px solid #DADDE1;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:8px;display:flex;align-items:center;gap:8px;max-width:calc(100vw - 24px);width:360px;">
+    <button id="galleryPlusBtn" type="button" aria-label="Choose photo" class="circle-btn" style="width:48px;height:48px;min-width:48px;border-radius:50%;background:#F0F2F5;border:1px solid #DADDE1;display:flex;align-items:center;justify-content:center;">＋</button>
+    <div id="keyboardInputWrap" class="keyboard-input-wrap" hidden style="flex:1;display:flex;align-items:center;gap:6px;background:#F0F2F5;border-radius:999px;padding:4px 8px;">
+      <label for="question" class="visually-hidden">Question</label>
+      <input id="question" aria-label="Question" placeholder="Ask anything…" autocomplete="off" style="flex:1;border:none;background:transparent;font-size:15px;padding:8px;outline:none;min-width:0;" />
+      <button id="keyboardSendBtn" type="button" aria-label="Send question" class="btn btn-primary" style="width:48px;height:48px;min-width:48px;border-radius:50%;background:#0866FF;color:#fff;border:none;display:flex;align-items:center;justify-content:center;">↑</button>
+    </div>
+    <div id="bottomHint" class="bottom-hint" style="flex:1;font-size:13px;color:#606770;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Tap Live to speak</div>
+    <button id="keyboardToggle" type="button" aria-label="Type a question" aria-expanded="false" class="circle-btn" style="width:48px;height:48px;min-width:48px;border-radius:50%;background:#fff;border:1px solid #DADDE1;display:flex;align-items:center;justify-content:center;">⌨</button>
+    <button id="heroLiveBtn" type="button" class="hero-live-btn" aria-label="Start live mode" style="min-width:56px;min-height:56px;height:56px;padding:0 18px;border-radius:999px;background:#0866FF;color:#fff;border:none;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:6px;box-shadow:0 4px 12px rgba(8,102,255,0.3);"> <span class="wave-glyph" aria-hidden="true">〰</span> Live</button>
+  </div>
+  <div style="height:80px;" aria-hidden="true"></div>
+</main>
+</div>
+
+<!-- DESIGN B placeholder -->
+<div data-design-section="b" hidden class="design-b-root" style="padding:24px;text-align:center;">
+  <div class="card" style="max-width:480px;margin:40px auto;padding:32px;">
+    <h2 style="margin:0 0 8px;">Design B — Full screen</h2>
+    <p style="color:#606770;">Coming in the next step. Full-screen camera with edge overlays.</p>
+  </div>
+</div>
+
+<!-- DESIGN C placeholder -->
+<div data-design-section="c" hidden class="design-c-root" style="padding:24px;text-align:center;">
+  <div class="card" style="max-width:480px;margin:40px auto;padding:32px;">
+    <h2 style="margin:0 0 8px;">Design C — Orb</h2>
+    <p style="color:#606770;">Coming in the next step. Floating orb assistant.</p>
+  </div>
+</div>
+
+<!-- DESIGN D Classic (today's page unchanged) -->
+<div data-design-section="d" hidden>
+<header class="topbar">
+  <div class="topbar-inner">
+    <h1>Show It To Me</h1>
+    <p class="subtitle">Point your camera at anything and ask.</p>
+  </div>
+  <p class="status" id="statusD" role="status" aria-live="polite">Ready</p>
+</header>
+<main class="container">
+  <section class="card camera-card">
+    <div class="camera-select" id="cameraSelectWrap">
+      <button id="camBack" type="button" class="btn btn-chip" aria-label="Back camera">Back</button>
+      <button id="camFront" type="button" class="btn btn-chip" aria-label="Front camera">Front</button>
+      <button id="liveToggle" type="button" class="btn btn-live" aria-label="Live voice mode"><span class="mic-icon" aria-hidden="true">🎙</span> Live</button>
+    </div>
+    <div id="liveBarD" class="live-bar" hidden aria-live="polite">
+      <span id="liveStateD" class="live-state">Listening</span>
+      <div class="level-meter" aria-hidden="true"><div class="level-bar" style="width:0%"></div></div>
+      <button id="stopBtnD" type="button" class="btn btn-stop" hidden>Stop</button>
+      <span id="scanReadyDotD" class="scan-ready-dot" hidden>● Ready</span>
+    </div>
+    <div id="transcriptBubbleD" class="transcript-bubble" hidden></div>
+    <div id="subtitlesD" class="subtitles" hidden></div>
+    <div class="camera-wrap" id="cameraWrapD">
+      <video id="videoD" autoplay playsinline muted></video>
+      <canvas id="overlayD"></canvas>
+      <img id="previewD" alt="Preview" hidden />
+      <div id="loadingD" class="loading" hidden><div class="spinner" aria-hidden="true"></div><p class="loading-text">Looking at the photo…</p></div>
+      <div id="tapStartD" class="tap-start" hidden><button type="button" class="btn btn-primary">Tap to start camera</button><p>Camera needs a tap on iPhone</p></div>
+    </div>
+    <div id="cameraFallbackD" class="camera-fallback" hidden><p id="cameraFallbackMsgD" class="fallback-msg"></p><button id="fallbackUploadD" type="button" class="fallback-link">Choose a photo</button></div>
+    <input type="file" id="fileD" accept="image/*" hidden />
+    <div hidden aria-hidden="true"><button id="captureD" type="button">Take photo</button><button id="retakeD" type="button">Retake</button><button id="uploadD" type="button">Choose from gallery</button><select id="cameraSelectD" hidden></select></div>
+  </section>
   <section class="card question-card">
     <div class="controls">
-      <label for="question" class="visually-hidden">Question</label>
-      <input id="question" aria-label="Question" placeholder="" autocomplete="off" />
+      <label for="questionD" class="visually-hidden">Question</label>
+      <input id="questionD" aria-label="Question" placeholder="" autocomplete="off" />
       <button id="ask" class="btn btn-primary" aria-label="Ask">Ask</button>
       <button id="retryBtn" class="btn btn-secondary" hidden type="button">Retry</button>
     </div>
-    <div id="questionHint" class="hint" hidden></div>
-    <div id="suggestedChips" class="chips" role="group" aria-label="Suggested questions">
+    <div id="questionHintD" class="hint" hidden></div>
+    <div id="suggestedChipsD" class="chips" role="group" aria-label="Suggested questions">
       <button class="chip" type="button" data-q="What is this?">What is this?</button>
       <button class="chip" type="button" data-q="What is that part called?">What is that part called?</button>
       <button class="chip" type="button" data-q="How does this work?">How does this work?</button>
     </div>
   </section>
-
-  <div id="answer" class="answer card" hidden></div>
-
-  <div id="zoomModal" class="zoom-modal" hidden>
-    <div class="zoom-backdrop"></div>
-    <img id="zoomImg" alt="Zoomed view" />
-    <button id="zoomClose" class="btn btn-secondary" type="button">Close</button>
-  </div>
+  <div id="answerD" class="answer card" hidden></div>
+  <div id="zoomModalD" class="zoom-modal" hidden><div class="zoom-backdrop"></div><img id="zoomImgD" alt="Zoomed view" /><button id="zoomCloseD" class="btn btn-secondary" type="button">Close</button></div>
 </main>
+</div>
+
+<!-- Shared hidden legacy elements for test compatibility (always present) -->
+<div hidden aria-hidden="true">
+  <button id="capture" type="button">Take photo</button>
+  <button id="retake" type="button">Retake</button>
+  <button id="upload" type="button">Choose from gallery</button>
+  <select id="cameraSelect" hidden></select>
+  <input type="checkbox" id="demoMode" hidden />
+  <input type="file" id="file" accept="image/*" hidden />
+</div>
+
+<div id="zoomModal" class="zoom-modal" hidden>
+  <div class="zoom-backdrop"></div>
+  <img id="zoomImg" alt="Zoomed view" />
+  <button id="zoomClose" class="btn btn-secondary" type="button">Close</button>
+</div>
+
 <footer class="footer">
   <p>Show It To Me — Meta hackathon demo • Privacy: images stay on device except for inference</p>
 </footer>

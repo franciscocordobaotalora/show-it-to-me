@@ -4,6 +4,7 @@ const fs = require('fs');
 
 const BASE = 'http://test.example.com/';
 async function serveLocalLive(page){
+  try{ await page.addInitScript(()=>{ try{ localStorage.setItem('sit_perm_seen','1'); }catch(e){} }); }catch(e){}
   const htmlPath = path.resolve(__dirname, '../static/index.html');
   const cssPath = path.resolve(__dirname, '../static/style.css');
   const jsPath = path.resolve(__dirname, '../static/app.js');
@@ -15,8 +16,9 @@ async function serveLocalLive(page){
   let inlined = html.replace('<link rel="stylesheet" href="style.css" />', `<style>${css}</style>`)
     .replace('<script src="live-audio.js"></script>', `<script>${livejs}</script>`)
     .replace('<script src="app.js"></script>', `<script>${js}</script>`);
-  await page.route('http://test.example.com/', r=>r.fulfill({status:200, contentType:'text/html', body:inlined}));
-  await page.route('http://test.example.com', r=>r.fulfill({status:200, contentType:'text/html', body:inlined}));
+  const workletPath2 = path.resolve(__dirname, '../static/mic-worklet.js');
+  let workletJs2=''; try{ workletJs2=fs.readFileSync(workletPath2,'utf8')}catch(e){}
+  await page.route('**/test.example.com/**', async r=>{ const u=r.request().url(); if(u.includes('favicon.ico')){ await r.fulfill({status:204, body:''}); return; } if(u.includes('/api/client-event')){ await r.fulfill({status:200, contentType:'application/json', body:'{}'}); return; } if(u.includes('/api/')){ await r.fulfill({status:200, contentType:'application/json', body:'{}'}); return; } if(u.includes('mic-worklet.js')){ await r.fulfill({status:200, contentType:'application/javascript', body: workletJs2}); return; } await r.fulfill({status:200, contentType:'text/html', body:inlined})});
   await page.route('**/api/client-event', r=>r.fulfill({status:200, contentType:'application/json', body:'{}'}));
   await page.route('**/static/mic-worklet.js', r=>r.fulfill({status:200, contentType:'application/javascript', body: fs.readFileSync(path.resolve(__dirname,'../static/mic-worklet.js'),'utf8')}));
 }
@@ -73,7 +75,7 @@ test.describe('T10 Live mode', ()=>{
   test('Live toggle exists next to Back/Front, blue pill mic icon', async ({page, context})=>{
     await mockMedia(context);
     await serveLocalLive(page);
-    await page.goto(BASE);
+    await page.goto(BASE, {waitUntil:'domcontentloaded'});
     await page.waitForTimeout(500);
     await expect(page.locator('#liveToggle')).toBeVisible();
     await expect(page.locator('#camBack')).toBeVisible();
@@ -87,7 +89,7 @@ test.describe('T10 Live mode', ()=>{
   test('full chain with mocked transcribe and analyze, frame at speech start sent', async ({page, context})=>{
     await mockMedia(context);
     await serveLocalLive(page);
-    await page.goto(BASE);
+    await page.goto(BASE, {waitUntil:'domcontentloaded'});
     await page.waitForTimeout(600);
     // mock transcribe and analyze
     let transcribeBody=null;
@@ -179,7 +181,7 @@ test.describe('T10 Live mode', ()=>{
   test('typed Ask still works when live active', async ({page, context})=>{
     await mockMedia(context);
     await serveLocalLive(page);
-    await page.goto(BASE);
+    await page.goto(BASE, {waitUntil:'domcontentloaded'});
     await page.route('**/api/analyze', async route=>{
       const b=JSON.parse(route.request().postData()||'{}');
       await route.fulfill({status:200, contentType:'application/json', body: JSON.stringify({frameId:b.frameId, requestId:b.requestId, view:'unknown', regions:[], explanation:'Typed answer.', needs_view:null, sources:[], provenance:{sam_model:'sam3'}})});
@@ -202,7 +204,7 @@ test.describe('T10 Live mode', ()=>{
       if(!HTMLMediaElement.prototype.setSinkId) HTMLMediaElement.prototype.setSinkId=async ()=>{};
     });
     await serveLocalLive(page);
-    await page.goto(BASE);
+    await page.goto(BASE, {waitUntil:'domcontentloaded'});
     await page.waitForTimeout(500);
     await page.locator('#liveToggle').click();
     await page.waitForTimeout(500);

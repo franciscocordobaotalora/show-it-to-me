@@ -62,6 +62,11 @@ let livePreRollBuffer = null; // ring buffer of last 400ms (4 blocks @100ms)
 let liveLatency = {};
 let livePausedForPlayback = false;
 let liveAudioUnlocked = false;
+let liveOneMomentActive = false;
+let liveOneMomentTimer = null;
+let liveResumeAfterSpeakTimeout = null;
+// for tests: track PCM chunks
+window.__livePCMLog = [];
 // T11 scan-ahead state
 const scanReadyDot = document.getElementById('scanReadyDot');
 let scanLatestId = null;
@@ -96,7 +101,50 @@ const demoMode = { checked: demoFlag };
 function setStatus(s){ if(statusEl) statusEl.textContent = s; if(statusEl) statusEl.setAttribute('aria-live','polite'); }
 function sendClientEvent(eventName, detailObj){ try{ const payload = { event:eventName, detail: String(detailObj||'').slice(0,300), userAgent: navigator.userAgent.slice(0,160), viewport:{w:window.innerWidth,h:window.innerHeight}, online:navigator.onLine }; const body = JSON.stringify(payload); if(navigator.sendBeacon){ const blob = new Blob([body],{type:'application/json'}); navigator.sendBeacon('/api/client-event', blob); } else { fetch('/api/client-event',{method:'POST', headers:{'Content-Type':'application/json'}, body, keepalive:true}); } }catch(e){} }
 // Live helpers
-function setLiveState(s){ if(liveStateEl) liveStateEl.textContent = s; logLatency(s.toLowerCase().replace(' ','_')); }
+// State machine: ONE small state machine as required
+const APP_STATES = ['idle','starting','listening','hearing','thinking','speaking','answer','error','permission_needed'];
+let appState = 'idle';
+const appStateListeners = [];
+function setAppState(next, detail){
+  if(!APP_STATES.includes(next)) return;
+  const prev = appState;
+  appState = next;
+  // also update UI status line
+  try{ if(navigator.vibrate) navigator.vibrate(10); }catch(e){}
+  // dispatch to listeners
+  appStateListeners.forEach(fn=>{ try{ fn({state:next, prev, detail}); }catch(e){} });
+  try{ document.documentElement.setAttribute('data-app-state', next); }catch(e){}
+  try{ sendClientEvent('app_state', prev+'->'+next+' '+(detail||'').slice(0,80)); }catch(e){}
+  // also drive legacy liveStateEl
+  if(liveStateEl) liveStateEl.textContent = stateLabel(next);
+  if(statusEl){ statusEl.textContent = stateStatusText(next, detail); statusEl.setAttribute('aria-live','polite'); }
+  // update body class for CSS per state
+  try{ document.body.setAttribute('data-state', next); }catch(e){}
+}
+function onAppState(fn){ if(typeof fn==='function') appStateListeners.push(fn); }
+function getAppState(){ return appState; }
+function stateLabel(s){
+  const map={idle:'Ready',starting:'Starting...',listening:'Listening',hearing:'Hearing you',thinking:'Thinking',speaking:'Speaking',answer:'Answer ready',error:'Error',permission_needed:'Permission needed'};
+  return map[s]||s;
+}
+function stateStatusText(s, detail){
+  const map={idle:'Tap Live and ask about anything',starting:'Starting camera and mic…',listening:'Listening — speak naturally',hearing:'Hearing you…',thinking:'Thinking…',speaking:'Speaking…',answer:'Answer ready',error: detail||'Something went wrong',permission_needed:'Camera and microphone needed to see and answer'};
+  return map[s]||s;
+}
+// expose state machine for view layer and tests
+window.AppState = { get: getAppState, set: setAppState, on: onAppState, STATES: APP_STATES, _label: stateLabel };
+
+function setLiveState(s){ // backwards compat wrapper that also drives state machine
+  if(liveStateEl) liveStateEl.textContent = s;
+  logLatency(s.toLowerCase().replace(' ','_'));
+  // map legacy live states to new appState
+  const lower=s.toLowerCase();
+  if(lower.includes('listening')) setAppState('listening', s);
+  else if(lower.includes('hearing')) setAppState('hearing', s);
+  else if(lower.includes('thinking')) setAppState('thinking', s);
+  else if(lower.includes('speaking')) setAppState('speaking', s);
+  else if(lower.includes('idle')) setAppState('idle');
+}
 function updateLevelMeter(level){ if(levelBar) levelBar.style.width = Math.min(100, Math.round(level*300))+'%'; }
 function logLatency(evt){ const ts = Date.now(); liveLatency[evt] = ts; try{ sendClientEvent(evt, String(ts)); }catch(e){} }
 function buildWavFromBlocks(blocks, sampleRate=16000){
@@ -124,9 +172,17 @@ async function unlockAudioForIOS(){
   try{
     if(!liveCtx) return;
     if(liveCtx.state==='suspended') await liveCtx.resume();
-    // speak empty utterance to unlock SpeechSynthesis on iOS if fallback needed
-    try{ const u=new SpeechSynthesisUtterance(''); u.volume=0; window.speechSynthesis.speak(u); }catch(e){}
+    // (a) FIX weird sound: use silent Web Audio buffer instead of empty SpeechSynthesisUtterance blip
+    try{
+      const buf = liveCtx.createBuffer(1, Math.round(liveCtx.sampleRate * 0.01), liveCtx.sampleRate);
+      // buffer is silent (zeros)
+      const src = liveCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(liveCtx.destination);
+      src.start();
+    }catch(e){}
     liveAudioUnlocked=true;
+    sendClientEvent('audio_unlock','webaudio_silent');
   }catch(e){}
 }
 async function connectLiveOutput(){
@@ -152,14 +208,43 @@ async function connectLiveOutput(){
   }
   try{ liveMaster.connect(liveCtx.destination); }catch(e){}
 }
+// (b) gapless scheduling with 10ms fade-in/out per chunk to fix weird sound at boundaries
+function applyFade(float32, sampleRate){
+  const fadeSamples = Math.round(sampleRate * 0.01); // 10ms
+  const n = float32.length;
+  if(n <= 2*fadeSamples){
+    // very short: triangular fade
+    for(let i=0;i<n;i++){
+      const f = i < n/2 ? (i / (n/2)) : ((n - i) / (n/2));
+      float32[i] *= Math.max(0, Math.min(1, f));
+    }
+  } else {
+    for(let i=0;i<fadeSamples;i++){
+      const g = i / fadeSamples;
+      float32[i] *= g;
+      float32[n-1 - i] *= g;
+    }
+  }
+  return float32;
+}
 function livePlayPCM(pcmBytes){
   if(!liveCtx || !liveMaster) return;
+  // cancel "One moment" if it was playing when real answer arrives (c)
+  if(liveOneMomentActive){
+    try{ liveFlush(); if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+    liveOneMomentActive=false;
+    sendClientEvent('one_moment_cancel','answer_arrived');
+  }
   const i16 = new Int16Array(pcmBytes.byteLength>>1); new Uint8Array(i16.buffer).set(new Uint8Array(pcmBytes,0,i16.length*2));
   const f=new Float32Array(i16.length); for(let i=0;i<i16.length;i++) f[i]=i16[i]/32768;
+  applyFade(f, 24000);
   const buf=liveCtx.createBuffer(1,f.length,24000); buf.copyToChannel(f,0);
   const src=liveCtx.createBufferSource(); src.buffer=buf; src.connect(liveMaster);
-  const now=liveCtx.currentTime; if(liveNextTime < now+0.04) liveNextTime=now+0.08;
-  src.start(liveNextTime); liveNextTime+=buf.duration; liveSources.add(src); src.onended=()=> liveSources.delete(src);
+  const now=liveCtx.currentTime; if(liveNextTime < now+0.02) liveNextTime = now + 0.05;
+  // gapless: schedule exactly at liveNextTime
+  src.start(liveNextTime); liveNextTime += buf.duration; liveSources.add(src); src.onended=()=> liveSources.delete(src);
+  // expose for tests: track last PCM for fade verification
+  if(window.__livePCMLog) window.__livePCMLog.push({len:f.length, faded:true});
 }
 function liveFlush(){ liveSources.forEach(s=>{ try{ s.stop(); }catch(e){} }); liveSources.clear(); liveNextTime=0; }
 // T11 scan helpers
@@ -248,17 +333,15 @@ function liveFallbackTTS(text){
     if(!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const u=new SpeechSynthesisUtterance(text);
-    // wait for voices if needed
     const voices=window.speechSynthesis.getVoices();
     if(voices && voices.length){
-      // simple language match: check answer language heuristic
       const isSpanish=/[áéíóúñ¿¡]/i.test(text);
       const v=voices.find(v=> isSpanish? v.lang.toLowerCase().includes('es') : v.lang.toLowerCase().includes('en'));
       if(v) u.voice=v;
     }
     window.speechSynthesis.speak(u);
-    sendClientEvent('tts_fallback','used');
-  }catch(e){}
+    sendClientEvent('tts_fallback', text.slice(0,80));
+  }catch(e){ sendClientEvent('tts_fallback','error:'+String(e).slice(0,60)); }
 }
 function makeFrameId(){ try{ return crypto.randomUUID(); }catch(e){ return 'f'+Math.random().toString(16).slice(2); } }
 function orientationFrom(w,h){ if(w>h) return 'landscape'; if(h>w) return 'portrait'; return 'square'; }
@@ -1086,15 +1169,24 @@ async function runLiveAnalyze(captured, question){
   pendingFrameId=frameId; pendingRequestId=requestId;
   logLatency('analyze_sent'); sendClientEvent('analyze_sent', question.slice(0,60));
   setLiveState('Thinking');
-  let sayMomentTimer=setTimeout(()=>{
-    // say "One moment" via TTS if takes >3s
+  // (c) One moment handled with cancellable timer and flag; never speak if answer arrives within 3s (we clear timer)
+  if(liveOneMomentTimer) clearTimeout(liveOneMomentTimer);
+  liveOneMomentActive=false;
+  liveOneMomentTimer=setTimeout(()=>{
+    liveOneMomentActive=true;
     speakTextLive('One moment', true);
   },3000);
   try{
     const payload={frameId, requestId, question, image:captured.dataUrl};
     if(scanSpeechId) payload.scanId=scanSpeechId;
     const resp=await fetch('/api/analyze',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-    clearTimeout(sayMomentTimer);
+    if(liveOneMomentTimer){ clearTimeout(liveOneMomentTimer); liveOneMomentTimer=null; }
+    // (c) if One moment was already speaking, cancel it now that answer arrived
+    if(liveOneMomentActive){
+      try{ liveFlush(); if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+      liveOneMomentActive=false;
+      sendClientEvent('one_moment_cancel','answer_arrived');
+    }
     if(!resp.ok){ setStatus('Could not analyze — try again'); setLiveState('Listening'); return; }
     const data=await resp.json();
     if(!data || data.frameId!==frameId) return;
@@ -1104,11 +1196,13 @@ async function runLiveAnalyze(captured, question){
     // speak answer
     const answerText=data.explanation||'';
     if(answerText) await speakAnswerLive(answerText); else setLiveState('Listening');
-  }catch(e){ clearTimeout(sayMomentTimer); setStatus('Network error'); setLiveState('Listening'); }
+  }catch(e){ if(liveOneMomentTimer){ clearTimeout(liveOneMomentTimer); liveOneMomentTimer=null; } setStatus('Network error'); setLiveState('Listening'); }
 }
 async function speakAnswerLive(answerText){
+  setAppState('speaking', answerText.slice(0,40));
   setLiveState('Speaking'); showSubtitles(answerText);
   livePausedForPlayback=true; audioSession('playback');
+  if(liveResumeAfterSpeakTimeout){ clearTimeout(liveResumeAfterSpeakTimeout); liveResumeAfterSpeakTimeout=null; }
   const sentences=splitSentencesLive(answerText);
   let firstByteTime=null;
   for(let idx=0; idx<sentences.length; idx++){
@@ -1131,21 +1225,31 @@ async function speakAnswerLive(answerText){
       sendClientEvent('tts_fallback', String(e).slice(0,80));
     }
   }
-  // wait for all sources to finish then resume listening
+  // wait for all sources to finish then resume listening with 400ms extra pause for echo (d)
   const checkDone=setInterval(()=>{
     if(liveSources.size===0){
       clearInterval(checkDone);
-      livePausedForPlayback=false;
-      audioSession('play-and-record');
-      if(liveEnabled) setLiveState('Listening');
-      // after speaking, update subtitles? keep visible
+      // (d) keep mic paused 400ms after last sample to avoid speaker feedback
+      liveResumeAfterSpeakTimeout = setTimeout(()=>{
+        livePausedForPlayback=false;
+        audioSession('play-and-record');
+        if(liveEnabled){
+          setLiveState('Listening');
+          setAppState('listening');
+          // continuous conversation: return to live frame
+          try{ resetToLive(); }catch(e){}
+          setAppState('answer', answerText.slice(0,60));
+          // after showing answer briefly, go back to listening (or keep answer state)
+          setTimeout(()=>{ if(liveEnabled) setAppState('listening'); }, 2000);
+        }
+      }, 400);
     }
   },200);
-  // fallback timeout: if no audio, resume after 10s
-  setTimeout(()=>{ clearInterval(checkDone); if(livePausedForPlayback){ livePausedForPlayback=false; audioSession('play-and-record'); if(liveEnabled) setLiveState('Listening'); } }, 12000);
+  // fallback timeout: if no audio, resume after 10s +400ms
+  setTimeout(()=>{ clearInterval(checkDone); if(livePausedForPlayback){ liveResumeAfterSpeakTimeout=setTimeout(()=>{ livePausedForPlayback=false; audioSession('play-and-record'); if(liveEnabled){ setLiveState('Listening'); setAppState('listening'); try{ resetToLive(); }catch(e){} } },400); } }, 12000);
 }
 function speakTextLive(text, isMoment){
-  // used for "One moment" immediate
+  if(isMoment) liveOneMomentActive=true;
   fetch('/api/speak',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})}).then(r=>r.ok? r.arrayBuffer():null).then(buf=>{ if(buf) livePlayPCM(buf); }).catch(()=>{ liveFallbackTTS(text); });
 }
 // Live controls
@@ -1257,5 +1361,234 @@ setStatus=function(msg){
   await startCamera(currentFacing);
 })();
 
-// expose for tests ?
-window.__app={ startCamera, captureLiveFrame, ask, resetToLive, frameDifference, captureGrayscale32, get state(){ return {isFrozen, asking, currentStream, currentFacing, currentFrame, scanLatestId, scanInFlight}; } };
+// ===== V2 DESIGN SYSTEM =====
+// Design persistence: URL ?design= and localStorage, default a
+function getDesignFromURL(){ try{ const u=new URLSearchParams(window.location.search); const d=u.get('design'); if(['a','b','c','d'].includes(d)) return d; }catch(e){} return null; }
+function getDesignStored(){ try{ const s=localStorage.getItem('sit_design'); if(['a','b','c','d'].includes(s)) return s; }catch(e){} return null; }
+let currentDesign = getDesignFromURL() || getDesignStored() || 'a';
+function applyDesign(d){
+  currentDesign=d;
+  try{ localStorage.setItem('sit_design', d); }catch(e){}
+  try{
+    const url=new URL(window.location.href);
+    url.searchParams.set('design', d);
+    window.history.replaceState({},'',url.toString());
+  }catch(e){}
+  document.documentElement.setAttribute('data-design', d);
+  document.body.setAttribute('data-design', d);
+  // show/hide design sections
+  document.querySelectorAll('[data-design-section]').forEach(el=>{ el.hidden = el.getAttribute('data-design-section') !== d; });
+  // update pill label
+  const pill=document.getElementById('designPill'); if(pill) pill.textContent = 'Design '+d.toUpperCase();
+  sendClientEvent('design_switch', d);
+  // for classic D, restore legacy topbar visibility
+  updateDesignSpecificUI();
+}
+function updateDesignSpecificUI(){
+  // Voice-first: hide Front/Back/Ask on main surface for a,b,c ; show only in D classic
+  const isClassic = currentDesign==='d';
+  const camSelectWrap=document.getElementById('cameraSelectWrap');
+  if(camSelectWrap) camSelectWrap.style.display = isClassic ? '' : 'none';
+  const questionCard=document.querySelector('.question-card');
+  if(questionCard) questionCard.style.display = isClassic ? '' : 'none';
+  // hero Live button always visible; ensure 56px+
+  const hero=document.getElementById('heroLiveBtn');
+  if(hero) hero.hidden=false;
+}
+// Design switcher pill interactions
+function initDesignSwitcher(){
+  const pill=document.getElementById('designPill');
+  const menu=document.getElementById('designMenu');
+  if(!pill || !menu) return;
+  pill.addEventListener('click', ()=>{ menu.hidden = !menu.hidden; });
+  menu.addEventListener('click', e=>{
+    const btn=e.target.closest('button[data-design]');
+    if(btn){ const d=btn.getAttribute('data-design'); applyDesign(d); menu.hidden=true; }
+    const sim=e.target.closest('#simulateBtn');
+    if(sim){ menu.hidden=true; startSimulate(); }
+  });
+  document.addEventListener('click', e=>{ if(!pill.contains(e.target) && !menu.contains(e.target)) menu.hidden=true; });
+  // apply initial
+  applyDesign(currentDesign);
+}
+// Simulate states: cycle every state with canned transcript/answer/highlight
+let simulateTimer=null;
+let simulateIdx=0;
+const SIM_STATES=[
+  {state:'idle', transcript:'', answer:'', status:'Tap Live and ask about anything', regions:[]},
+  {state:'permission_needed', transcript:'', answer:'', status:'Camera and microphone needed to see and answer', regions:[]},
+  {state:'starting', transcript:'', answer:'', status:'Starting camera and mic…', regions:[]},
+  {state:'listening', transcript:'', answer:'', status:'Listening — speak naturally', regions:[]},
+  {state:'hearing', transcript:'Where is the power supply?', answer:'', status:'Hearing you…', regions:[]},
+  {state:'thinking', transcript:'Where is the power supply?', answer:'', status:'Thinking…', regions:[]},
+  {state:'speaking', transcript:'Where is the power supply?', answer:'The USB-C power port is on the left side, next to the micro-HDMI ports.', status:'Speaking…', regions:[{polygon:[[0.12,0.45],[0.18,0.45],[0.18,0.6],[0.12,0.6]]}]},
+  {state:'answer', transcript:'Where is the power supply?', answer:'The USB-C power port is on the left side, next to the micro-HDMI ports.', status:'Answer ready', regions:[{polygon:[[0.12,0.45],[0.18,0.45],[0.18,0.6],[0.12,0.6]]}]},
+  {state:'error', transcript:'', answer:'', status:'Microphone permission denied — allow it and try again', regions:[]},
+];
+function startSimulate(){
+  if(simulateTimer) clearInterval(simulateTimer);
+  simulateIdx=0;
+  sendClientEvent('simulate_start','');
+  function tick(){
+    const s=SIM_STATES[simulateIdx % SIM_STATES.length];
+    setAppState(s.state, s.status);
+    // update canned UI via custom event for Design A renderer
+    try{ window.dispatchEvent(new CustomEvent('simulate-state',{detail:s})); }catch(e){}
+    // also render canned transcript/answer/highlight in classic overlay for demo
+    const tb=document.getElementById('transcriptBubble');
+    const ans=document.getElementById('answer');
+    const sub=document.getElementById('subtitles');
+    if(s.transcript && tb){ tb.textContent=s.transcript; tb.hidden=false; }
+    else if(tb){ tb.hidden=true; }
+    if(s.answer && ans){ ans.textContent=s.answer; ans.hidden=false; }
+    else if(ans && s.state!=='answer' && s.state!=='speaking'){ ans.hidden=true; }
+    if(s.regions && s.regions.length){ lastRegions=s.regions.map((r,i)=>({id:'sim'+i, polygon:r.polygon, bbox:[0.12,0.45,0.18,0.6], score:0.9, status:'observed', source:'sim'})); lastFrame={width:640,height:480}; try{ drawRegions(lastRegions, lastFrame); }catch(e){} }
+    else { try{ clearOverlay(); }catch(e){} }
+    simulateIdx++;
+  }
+  tick();
+  simulateTimer=setInterval(tick, 1800);
+  // auto stop after 2 cycles
+  setTimeout(()=>{ clearInterval(simulateTimer); simulateTimer=null; setAppState('idle'); }, SIM_STATES.length*1800*2 + 500);
+}
+// Permission screen: first-run one-sentence explanation before browser prompt
+function initPermissionScreen(){
+  const screen=document.getElementById('permissionScreen');
+  const btn=document.getElementById('permissionBtn');
+  if(!screen || !btn) return;
+  let seen=false;
+  try{ seen=localStorage.getItem('sit_perm_seen')==='1'; }catch(e){}
+  if(!seen){
+    setAppState('permission_needed');
+    screen.hidden=false;
+  }
+  btn.addEventListener('click', async ()=>{
+    screen.hidden=true;
+    try{ localStorage.setItem('sit_perm_seen','1'); }catch(e){}
+    setAppState('starting');
+    // trigger camera+mic permission prompts
+    try{
+      await startCamera(currentFacing);
+      // audio permission test: try getUserMedia audio
+      try{
+        const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop());
+      }catch(e){}
+      setAppState('idle');
+    }catch(e){
+      setAppState('error', String(e.message||'permission'));
+      screen.hidden=false;
+      const msgEl=document.getElementById('permissionMsg'); if(msgEl) msgEl.textContent='Camera or microphone blocked — please allow in browser settings and try again.';
+    }
+  });
+}
+// Camera flip: only show when >1 camera exists
+async function updateCameraFlipVisibility(){
+  const flipBtn=document.getElementById('cameraFlipBtn');
+  if(!flipBtn) return;
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices){ flipBtn.hidden=true; return; }
+    const devices=await navigator.mediaDevices.enumerateDevices();
+    const cams=devices.filter(d=>d.kind==='videoinput');
+    flipBtn.hidden = cams.length <=1;
+    // also update legacy buttons hidden for non-classic
+    updateDesignSpecificUI();
+  }catch(e){ flipBtn.hidden=true; }
+}
+// Keyboard icon toggle for typing
+function initKeyboardToggle(){
+  const toggle=document.getElementById('keyboardToggle');
+  const wrap=document.getElementById('keyboardInputWrap');
+  const input=document.getElementById('question');
+  const sendBtn=document.getElementById('keyboardSendBtn');
+  if(!toggle || !wrap) return;
+  toggle.addEventListener('click', ()=>{
+    const isHidden = wrap.hidden;
+    wrap.hidden = !isHidden;
+    if(!wrap.hidden && input) input.focus();
+    toggle.setAttribute('aria-expanded', String(!isHidden));
+  });
+  if(sendBtn) sendBtn.addEventListener('click', ()=>{ ask(); wrap.hidden=true; });
+  if(input) input.addEventListener('keydown', e=>{ if(e.key==='Enter'){ ask(); wrap.hidden=true; }});
+}
+// Hero Live button wire
+function initHeroLive(){
+  const hero=document.getElementById('heroLiveBtn');
+  const hero2=document.getElementById('liveToggle'); // legacy
+  if(!hero) return;
+  hero.addEventListener('click', async ()=>{
+    if(!liveEnabled) await startLive(); else stopLive();
+  });
+  // sync hero label with live state via AppState listener
+  onAppState(({state})=>{
+    if(!hero) return;
+    if(liveEnabled && (state==='listening'||state==='hearing'||state==='thinking'||state==='speaking')){
+      hero.textContent='Stop';
+      hero.classList.add('is-active');
+      hero.setAttribute('aria-label','Stop live mode');
+    } else {
+      hero.innerHTML='<span class="wave-glyph" aria-hidden="true">〰</span> Live';
+      hero.classList.remove('is-active');
+      hero.setAttribute('aria-label','Start live mode');
+    }
+  });
+  // also allow legacy toggle to drive hero
+  if(hero2) hero2.addEventListener('click', ()=>{ // keep sync
+    setTimeout(()=>{ const ev=new Event('click'); },0);
+  });
+}
+// State indicator animation helpers (pulse, waveform, dots, bars)
+function initStateIndicators(){
+  const indicator=document.getElementById('stateIndicator');
+  if(!indicator) return;
+  onAppState(({state})=>{
+    indicator.setAttribute('data-state', state);
+    indicator.className='state-indicator is-'+state;
+    // accessibility: aria-live already on statusEl, ensure indicator has aria-hidden
+  });
+}
+// Gallery plus button
+function initGalleryPlus(){
+  const plus=document.getElementById('galleryPlusBtn');
+  const file=document.getElementById('file');
+  if(!plus || !file) return;
+  plus.addEventListener('click', ()=> file.click());
+}
+// Init all V2 once DOM ready
+function initV2(){
+  initDesignSwitcher();
+  initPermissionScreen();
+  initKeyboardToggle();
+  initHeroLive();
+  initStateIndicators();
+  initGalleryPlus();
+  updateCameraFlipVisibility();
+  if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
+    navigator.mediaDevices.addEventListener('devicechange', updateCameraFlipVisibility);
+  }
+  // initial state
+  setAppState('idle');
+  // Design A specific: bind simulate-state to thread rendering
+  window.addEventListener('simulate-state', e=>{
+    const s=e.detail;
+    const thread=document.getElementById('designAThread');
+    if(!thread) return;
+    if(s.state==='hearing' || s.state==='thinking' || s.state==='speaking' || s.state==='answer'){
+      thread.hidden=false;
+      const userBubble=thread.querySelector('.user-bubble');
+      const answerBubble=thread.querySelector('.assistant-bubble');
+      if(userBubble) userBubble.textContent = s.transcript||'';
+      if(answerBubble) answerBubble.textContent = s.answer||'';
+    } else if(s.state==='idle'){
+      // show empty state
+      thread.hidden=false;
+    }
+  });
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', initV2); else initV2();
+
+// Helpers for fade export verification (used by node test)
+window.__audioFade = { applyFade, fadeMs:10 };
+
+// expose for tests
+window.__app={ startCamera, captureLiveFrame, ask, resetToLive, frameDifference, captureGrayscale32, applyDesign, getDesign:()=>currentDesign, startSimulate, get state(){ return {isFrozen, asking, currentStream, currentFacing, currentFrame, scanLatestId, scanInFlight, appState, design:currentDesign}; } };
+

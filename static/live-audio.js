@@ -218,11 +218,80 @@ function prependPreRoll(utteranceSamples, preRollSamples) {
   out.set(utteranceSamples, preRollSamples.length);
   return out;
 }
+// === Weird sound fix: 10ms fade per chunk and gapless scheduling ===
+function applyFadeFloat32(float32, sampleRate){
+  const fadeSamples = Math.round(sampleRate * 0.01); // 10ms
+  const n=float32.length;
+  if(n <= 2*fadeSamples){
+    for(let i=0;i<n;i++){ const f = i < n/2 ? (i/(n/2)) : ((n-i)/(n/2)); float32[i] *= Math.max(0,Math.min(1,f)); }
+  } else {
+    for(let i=0;i<fadeSamples;i++){ const g=i/fadeSamples; float32[i]*=g; float32[n-1-i]*=g; }
+  }
+  return float32;
+}
+function int16ToFloat32(int16){
+  const f=new Float32Array(int16.length);
+  for(let i=0;i<int16.length;i++) f[i]=int16[i]/32768;
+  return f;
+}
+function float32ToInt16(float32){
+  const o=new Int16Array(float32.length);
+  for(let i=0;i<float32.length;i++){ let s=Math.max(-1,Math.min(1,float32[i])); o[i]= s<0 ? s*32768 : s*32767; }
+  return o;
+}
+// Render exact chunk sequence into a single Float32 array with per-chunk fade applied, gapless concat
+function renderChunkSequence(int16Chunks, sampleRate){
+  const sr = sampleRate||24000;
+  const fadedChunks = int16Chunks.map(c=>{
+    const f=int16ToFloat32(c);
+    applyFadeFloat32(f, sr);
+    return f;
+  });
+  let total=0; for(const c of fadedChunks) total+=c.length;
+  const out=new Float32Array(total);
+  let off=0; for(const c of fadedChunks){ out.set(c, off); off+=c.length; }
+  return out;
+}
+// Check for jumps at chunk boundaries: max absolute delta between consecutive samples
+function maxBoundaryJump(float32, chunkLengths){
+  let maxJump=0; let boundaryJumps=[];
+  let pos=0;
+  for(let ci=0; ci<chunkLengths.length; ci++){
+    const len=chunkLengths[ci];
+    const boundaryPos = pos + len; // position of first sample of next chunk
+    if(boundaryPos < float32.length){
+      const jump = Math.abs(float32[boundaryPos] - float32[boundaryPos-1]);
+      boundaryJumps.push(jump);
+      if(jump>maxJump) maxJump=jump;
+    }
+    pos += len;
+  }
+  return {maxJump, boundaryJumps};
+}
+// Verify fades are applied: first and last sample near zero
+function verifyFades(float32, chunkLengths, sampleRate){
+  const sr=sampleRate||24000;
+  const fadeSamples=Math.round(sr*0.01);
+  let ok=true; let details=[];
+  let pos=0;
+  for(const len of chunkLengths){
+    const chunkEnd = pos+len-1;
+    const first=Math.abs(float32[pos]);
+    const last=Math.abs(float32[chunkEnd]);
+    // after fade, edge samples should be close to 0 (within 0.02 threshold for typical signals)
+    const firstOk = first < 0.02;
+    const lastOk = last < 0.02;
+    details.push({pos, first, last, firstOk, lastOk});
+    if(!firstOk || !lastOk) ok=false;
+    pos+=len;
+  }
+  return {ok, details, fadeSamples};
+}
 
 // Export for Node and browser
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildWav, buildWavHeader, downsampleFloat32To16k, computeLevel, VAD, splitSentences, PreRollBuffer, PRE_ROLL_MS, PRE_ROLL_SAMPLES, concatInt16, prependPreRoll };
+  module.exports = { buildWav, buildWavHeader, downsampleFloat32To16k, computeLevel, VAD, splitSentences, PreRollBuffer, PRE_ROLL_MS, PRE_ROLL_SAMPLES, concatInt16, prependPreRoll, applyFadeFloat32, int16ToFloat32, float32ToInt16, renderChunkSequence, maxBoundaryJump, verifyFades };
 }
 if (typeof window !== 'undefined') {
-  window.LiveAudio = { buildWav, downsampleFloat32To16k, computeLevel, VAD, splitSentences, PreRollBuffer, PRE_ROLL_MS, PRE_ROLL_SAMPLES, concatInt16, prependPreRoll };
+  window.LiveAudio = { buildWav, downsampleFloat32To16k, computeLevel, VAD, splitSentences, PreRollBuffer, PRE_ROLL_MS, PRE_ROLL_SAMPLES, concatInt16, prependPreRoll, applyFadeFloat32, int16ToFloat32, float32ToInt16, renderChunkSequence, maxBoundaryJump, verifyFades };
 }
