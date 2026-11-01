@@ -405,6 +405,18 @@ def analyze(data, glimmer_mod, sam_mod):
                     break
                 part = t.get('part')
                 label = t.get('label') or (get_part_label(part) if part else 'item')
+                # log grounding selection/scores and agreement per T12
+                if result is not None and isinstance(result, dict):
+                    sel_dbg = result.get('selection_debug') or {}
+                    try:
+                        eventlog.log_event('grounding_selection', requestId=requestId, frameId=frameId, label=label, part=part, selection=result.get('selection'), score=float(result.get('score',0) or 0), text_score=sel_dbg.get('text_score'), box_score=sel_dbg.get('box_score'), text_iou=sel_dbg.get('text_iou'), box_iou=sel_dbg.get('box_iou'), refined=bool(sel_dbg.get('refined')))
+                    except Exception:
+                        pass
+                    if sel_dbg.get('agreement_iou') is not None:
+                        try:
+                            eventlog.log_event('grounding_agreement', requestId=requestId, frameId=frameId, label=label, part=part, agreement_iou=sel_dbg.get('agreement_iou'), text_iou=sel_dbg.get('text_iou'), box_iou=sel_dbg.get('box_iou'), disagreement=bool(sel_dbg.get('disagreement')))
+                        except Exception:
+                            pass
                 if result is None:
                     # generic quality gate: if SAM found nothing, fallback to Glimmer box as dashed outline
                     box_fallback = t.get('box_1000')

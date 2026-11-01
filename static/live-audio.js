@@ -151,10 +151,78 @@ function splitSentences(text) {
   return out.map(s => /[.!?]$/.test(s) ? s : s + '.');
 }
 
+// Pre-roll ring buffer: keep last 400ms (6400 samples @16k, 4x 1600-sample blocks)
+const PRE_ROLL_MS = 400;
+const PRE_ROLL_SAMPLES = 6400; // 16k * 0.4
+
+function concatInt16(arrays) {
+  let len = 0;
+  for (const a of arrays) len += a.length;
+  const out = new Int16Array(len);
+  let off = 0;
+  for (const a of arrays) { out.set(a, off); off += a.length; }
+  return out;
+}
+
+class PreRollBuffer {
+  constructor(maxSamples = PRE_ROLL_SAMPLES) {
+    this.maxSamples = maxSamples;
+    this.blocks = []; // queue of Int16Array
+    this.total = 0;
+  }
+  push(block) {
+    if (!(block instanceof Int16Array)) return;
+    this.blocks.push(block.slice()); // copy
+    this.total += block.length;
+    while (this.total > this.maxSamples && this.blocks.length > 0) {
+      const removed = this.blocks.shift();
+      this.total -= removed.length;
+    }
+    // trim first block if still over (e.g., large block > max)
+    if (this.total > this.maxSamples && this.blocks.length === 1) {
+      const b = this.blocks[0];
+      const keep = b.subarray(b.length - this.maxSamples);
+      this.blocks[0] = keep.slice();
+      this.total = keep.length;
+    } else if (this.total > this.maxSamples) {
+      // still over after shifting, trim head
+      let excess = this.total - this.maxSamples;
+      while (excess > 0 && this.blocks.length) {
+        const first = this.blocks[0];
+        if (first.length <= excess) {
+          excess -= first.length;
+          this.total -= first.length;
+          this.blocks.shift();
+        } else {
+          const trimmed = first.subarray(excess);
+          this.blocks[0] = trimmed.slice();
+          this.total -= excess;
+          excess = 0;
+        }
+      }
+    }
+  }
+  get() {
+    if (this.blocks.length === 0) return new Int16Array(0);
+    return concatInt16(this.blocks);
+  }
+  clear() { this.blocks = []; this.total = 0; }
+}
+
+// Helper used at speech start: prepend pre-roll to utterance buffer
+function prependPreRoll(utteranceSamples, preRollSamples) {
+  if (!preRollSamples || preRollSamples.length === 0) return utteranceSamples;
+  if (!utteranceSamples || utteranceSamples.length === 0) return preRollSamples.slice();
+  const out = new Int16Array(preRollSamples.length + utteranceSamples.length);
+  out.set(preRollSamples, 0);
+  out.set(utteranceSamples, preRollSamples.length);
+  return out;
+}
+
 // Export for Node and browser
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildWav, buildWavHeader, downsampleFloat32To16k, computeLevel, VAD, splitSentences };
+  module.exports = { buildWav, buildWavHeader, downsampleFloat32To16k, computeLevel, VAD, splitSentences, PreRollBuffer, PRE_ROLL_MS, PRE_ROLL_SAMPLES, concatInt16, prependPreRoll };
 }
 if (typeof window !== 'undefined') {
-  window.LiveAudio = { buildWav, downsampleFloat32To16k, computeLevel, VAD, splitSentences };
+  window.LiveAudio = { buildWav, downsampleFloat32To16k, computeLevel, VAD, splitSentences, PreRollBuffer, PRE_ROLL_MS, PRE_ROLL_SAMPLES, concatInt16, prependPreRoll };
 }

@@ -58,6 +58,7 @@ let liveBlocks = []; // collected Int16 blocks for current utterance
 let liveVADState = null;
 let liveSpeaking = false;
 let liveSpeechStartFrame = null;
+let livePreRollBuffer = null; // ring buffer of last 400ms (4 blocks @100ms)
 let liveLatency = {};
 let livePausedForPlayback = false;
 let liveAudioUnlocked = false;
@@ -807,6 +808,11 @@ async function startLive(){
   resetLiveLatency();
   setLiveState('Listening');
   liveBlocks=[]; liveSpeaking=false; liveVADState={ speechMs:0, silenceMs:0, totalMs:0 };
+  // init pre-roll buffer (400ms = 4x100ms blocks, 6400 samples)
+  try {
+    if (window.LiveAudio && window.LiveAudio.PreRollBuffer) livePreRollBuffer = new window.LiveAudio.PreRollBuffer(6400);
+    else livePreRollBuffer = { blocks: [], total:0, maxSamples:6400, push(b){ this.blocks.push(b.slice()); this.total+=b.length; while(this.total>this.maxSamples && this.blocks.length>1){ const r=this.blocks.shift(); this.total-=r.length; } if(this.total>this.maxSamples){ const f=this.blocks[0]; const keep=f.subarray(f.length-this.maxSamples); this.blocks[0]=keep.slice(); this.total=keep.length; } }, get(){ let l=0; for(const a of this.blocks) l+=a.length; const o=new Int16Array(l); let off=0; for(const a of this.blocks){ o.set(a,off); off+=a.length; } return o; }, clear(){ this.blocks=[]; this.total=0; } };
+  } catch(e){ livePreRollBuffer=null; }
   // start camera if not already
   if(!currentStream) { try{ await startCamera(currentFacing); }catch(e){} }
   // audioSession like an earlier voice project
@@ -880,19 +886,26 @@ function stopLive(){
   if(liveOutputEl){ liveOutputEl.pause(); liveOutputEl.srcObject=null; liveOutputEl.remove(); liveOutputEl=null; } liveOutDest=null; liveMaster=null; liveNextTime=0;
   audioSession('playback'); audioSession('auto');
   if(wakeLock){ try{ wakeLock.release(); }catch(e){} wakeLock=null; }
-  liveBlocks=[]; liveSpeaking=false; liveSpeechStartFrame=null;
+  liveBlocks=[]; liveSpeaking=false; liveSpeechStartFrame=null; if(livePreRollBuffer) livePreRollBuffer.clear();
 }
 function handleLiveBlock(int16){
   const level=computeLevelInt16(int16);
   updateLevelMeter(level);
   const isSpeech= level > 0.02;
+  // always feed pre-roll buffer (keep last 400ms) when not speaking, so first word not clipped
+  if(!liveSpeaking && livePreRollBuffer) livePreRollBuffer.push(int16);
   if(!liveSpeaking){
     if(isSpeech) liveVADState.speechMs+=100; else liveVADState.speechMs=0;
     if(liveVADState.speechMs >= 150){
       // speech start
       liveSpeaking=true;
       liveVADState.silenceMs=0; liveVADState.totalMs=liveVADState.speechMs;
-      liveBlocks=[];
+      // prepend last 400ms pre-roll to utterance so first word not cut
+      let pre = null;
+      try{ pre = livePreRollBuffer ? livePreRollBuffer.get() : null; }catch(e){ pre=null; }
+      if(pre && pre.length) liveBlocks=[pre]; else liveBlocks=[];
+      // clear pre-roll after consumption to avoid duplication
+      if(livePreRollBuffer) livePreRollBuffer.clear();
       liveLatency.speech_start=Date.now(); sendClientEvent('speech_start','');
       setLiveState('Hearing you');
       // capture frame at speech START
@@ -905,6 +918,8 @@ function handleLiveBlock(int16){
   } else {
     liveVADState.totalMs+=100;
     liveBlocks.push(int16);
+    // do not add to pre-roll while speaking
+
     if(isSpeech) liveVADState.silenceMs=0; else liveVADState.silenceMs+=100;
     // max 15s utterance
     if(liveVADState.totalMs >= 15000){

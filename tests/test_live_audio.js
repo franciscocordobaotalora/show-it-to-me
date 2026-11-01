@@ -72,4 +72,36 @@ const {buildWav, downsampleFloat32To16k, computeLevel, VAD} = require('../static
   console.log('VAD ok');
 })();
 
+// Pre-roll 400ms ring buffer proves first word not clipped
+(function testPreRoll(){
+  const {PreRollBuffer, PRE_ROLL_MS, PRE_ROLL_SAMPLES, prependPreRoll} = require('../static/live-audio.js');
+  assert.equal(PRE_ROLL_MS,400);
+  assert.equal(PRE_ROLL_SAMPLES,6400);
+  const buf=new PreRollBuffer();
+  // simulate 10 blocks of 100ms (1600 samples each) with distinct values 1..10
+  for(let b=0;b<10;b++){
+    const block=new Int16Array(1600);
+    block.fill(b+1);
+    buf.push(block);
+  }
+  // should keep only last 4 blocks (6400 samples) = values 7,8,9,10
+  const pre=buf.get();
+  assert.equal(pre.length, 6400);
+  assert.equal(pre[0],7);
+  assert.equal(pre[1600],8);
+  assert.equal(pre[3200],9);
+  assert.equal(pre[4800],10);
+  // prepend to utterance: simulate utterance blocks 11,12 after speech_start
+  const utt=new Int16Array(3200);
+  utt.fill(99);
+  const combined=prependPreRoll(utt, pre);
+  assert.equal(combined.length, 6400+3200);
+  assert.equal(combined[0],7);
+  assert.equal(combined[6400],99);
+  // build WAV and verify data length includes pre-roll
+  const wav=buildWav(combined,16000);
+  assert.equal(wav.length,44+combined.length*2);
+  console.log('pre-roll 400ms ok, wav includes pre-roll',combined.length,'samples');
+})();
+
 console.log('All live audio tests passed');
