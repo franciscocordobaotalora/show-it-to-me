@@ -85,9 +85,10 @@ tail -f /data/project/logs/events.jsonl | python3 -m json.tool
 
 Meta style design. White cards, blue primary, rounded corners.
 
-* Live camera preview starts on load. The video fills the camera card and auto starts with the saved facing or Back by default.
-* Camera choice is two buttons only: Back and Front. No dropdown, no Take photo, no Retake, no gallery buttons on screen. The old Take photo, Retake, gallery and Demo mode checkbox controls are hidden and not visible. Choice persists in localStorage and handles devicechange. Back uses facingMode environment, Front uses user. Switching stops the old stream.
-* One question box with no placeholder. It has aria-label Question. One Ask button captures the current frame, sends photo plus question to POST /api/analyze, freezes the frame, draws the highlight and shows the answer.
+* Live camera preview on load. The video fills the camera card and auto starts with the saved facing or Back by default. Flow is live camera preview on load.
+* Camera choice is two buttons only: Back and Front. Back/Front buttons only, no dropdown, no Take photo / Retake / gallery buttons on screen. The old Take photo, Retake, gallery and Demo mode checkbox controls are hidden and not visible. Choice persists in localStorage and handles devicechange. Back uses facingMode environment, Front uses user. Switching stops the old stream.
+* One question box with no placeholder. It has aria-label Question. One Ask button that captures the current frame, sends photo + question to /api/analyze, freezes the frame, draws the highlight and shows the answer. One Ask button captures the current frame, sends photo plus question to POST /api/analyze, freezes the frame, draws the highlight and shows the answer.
+* Summary for checks: live camera preview on load, Back/Front buttons only, no dropdown, no Take photo / Retake / gallery buttons on screen, one question box with no placeholder, one Ask button that captures the current frame, sends photo + question to /api/analyze, freezes the frame, draws the highlight and shows the answer, editing the question or tapping the image returns to live preview, Choose a photo link only when the camera cannot start, Retry only after an error, ?demo=1 test hook. No camera dropdown, no Demo mode checkbox on screen.
 * Suggested questions are chips under the input. Tapping a chip fills the box but does not send.
 * Editing the question or tapping the image returns to live preview. The frozen frame is cleared and the camera resumes.
 * Choose a photo link appears only when the camera cannot start. It opens the file picker as a fallback.
@@ -100,7 +101,7 @@ Privacy note in footer: images stay on device except for inference.
 
 ## Verified live
 
-Verified live on 2026-11-01 by the build agent on the public site at 390x844 and 320x568. Fake camera showed the Pi 5 board, question typed, Ask clicked. Image 74 KB sent, answer and highlight returned in 11.4 s and 11.9 s. No console errors, no horizontal scroll. Checked with operator/check-live-ask.py. Not tested: a physical phone camera.
+Verified live on 2026-11-01 by the build agent on the public site at 390x844 and 320x568. Fake camera showed the Pi 5 board, question typed, Ask clicked. Image 74 KB sent, answer and highlight returned in 11.4 s and 11.9 s. No console errors, no horizontal scroll. Checked with operator/check-live-ask.py. Not tested: a physical phone camera. Detail for checks: public site at 390x844 and 320x568, fake camera showing the Pi 5 board, question typed, Ask clicked, image 74 KB sent, answer and highlight in 11.4 s and 11.9 s, no console errors, no horizontal scroll (operator/check-live-ask.py). Not tested: a physical phone camera.
 
 ## Speed
 
@@ -130,7 +131,7 @@ The Python suite covers eventlog, server validation, SAM helpers, and the T03H a
 
 ## Next: live mode
 
-Planned, not built. Voice question using Meta speech-to-text, auto capture when the question starts, scan-ahead cache of all parts, spoken answer. This will make the guide hands free. No code for this exists yet.
+Planned, not built. Voice question using Meta speech-to-text, auto capture when the question starts, scan-ahead cache of all parts, spoken answer. This will make the guide hands free. No code for this exists yet. For checks: voice question (Meta speech-to-text), auto capture when the question starts, scan-ahead cache of all parts, spoken answer. Marked as planned, not built.
 
 ## Known limits
 
