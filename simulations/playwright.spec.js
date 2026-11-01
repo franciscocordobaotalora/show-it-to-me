@@ -120,12 +120,14 @@ test.describe('Show It To Me T07 – One-step Ask flow', () => {
     await page.waitForTimeout(400);
     const callsAfterFront = await page.evaluate(()=> window.__cameraCalls);
     const last = callsAfterFront[callsAfterFront.length-1];
-    expect(last.video.facingMode).toBe('user');
+    const fmFront = typeof last.video.facingMode==='string' ? last.video.facingMode : last.video.facingMode?.ideal || last.video.facingMode?.exact;
+    expect(fmFront).toBe('user');
     await page.locator('#camBack').click();
     await page.waitForTimeout(400);
     const callsAfterBack = await page.evaluate(()=> window.__cameraCalls);
     const last2 = callsAfterBack[callsAfterBack.length-1];
-    expect(last2.video.facingMode).toBe('environment');
+    const fmBack = typeof last2.video.facingMode==='string' ? last2.video.facingMode : last2.video.facingMode?.ideal || last2.video.facingMode?.exact;
+    expect(fmBack).toBe('environment');
   });
 
   test('live preview fills photo area and starts on page open, hidden controls not visible', async ({ page, context }) => {

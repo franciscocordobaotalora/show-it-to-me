@@ -39,6 +39,18 @@ let abortController = null;
 let isFrozen = false;
 let asking = false;
 let currentObjectUrl = null;
+const tapStart = document.getElementById('tapStart');
+let wakeLock = null;
+
+// iOS API guards: check availability with fallbacks (an earlier voice project pattern)
+function safeAt(arr, idx){ try{ if(Array.prototype.at) return arr.at(idx); }catch(e){} return arr[idx<0?arr.length+idx:idx]; }
+function safeStructuredClone(obj){ try{ if(typeof structuredClone==='function') return structuredClone(obj); }catch(e){} return JSON.parse(JSON.stringify(obj)); }
+
+// wakeLock for iPhone (keep screen awake during camera, like our earlier voice app call)
+async function requestWakeLock(){ try{ if('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch(e){} }
+function releaseWakeLock(){ try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} }
+// audioSession guard (iOS, like our earlier voice app)
+function audioSession(type){ try{ if(navigator.audioSession) navigator.audioSession.type = type; }catch(e){} }
 
 // demo hook via URL ?demo=1 (no checkbox on page)
 const demoFlag = (()=>{ try{ return new URLSearchParams(window.location.search).get('demo') === '1'; }catch(e){ return false; } })();
@@ -65,6 +77,34 @@ function updateCameraButtons(activeFacing){
   if(camBackBtn) camBackBtn.classList.toggle('active', activeFacing==='environment');
   if(camFrontBtn) camFrontBtn.classList.toggle('active', activeFacing==='user');
 }
+// iOS capture guard: prevent blank/black frames, disable Ask until video has dimensions
+function isBlankImageData(imageData){
+  if(!imageData || !imageData.data) return true;
+  const data=imageData.data;
+  let sum=0, sumSq=0, count=0;
+  // sample every 16th pixel to keep fast
+  for(let i=0;i<data.length;i+=64){
+    const r=data[i], g=data[i+1], b=data[i+2];
+    const lum=0.299*r+0.587*g+0.114*b;
+    sum+=lum; sumSq+=lum*lum; count++;
+  }
+  if(count===0) return true;
+  const avg=sum/count;
+  const variance=sumSq/count - avg*avg;
+  // blank if very dark and low variance (black frame) or pure single color
+  if(avg<15 && variance<80) return true;
+  if(avg<5) return true;
+  return false;
+}
+function updateAskEnabled(){
+  if(!askBtn) return;
+  const hasPreview = !!(preview && !preview.hidden && preview.src);
+  const hasVideoDims = !!(video && video.videoWidth>0 && video.videoHeight>0 && currentStream);
+  const enabled = hasPreview || hasVideoDims;
+  askBtn.disabled = !enabled || asking;
+  if(enabled) askBtn.removeAttribute('aria-disabled');
+  else askBtn.setAttribute('aria-disabled','true');
+}
 function showLoading(text){ if(loadingEl){ loadingEl.hidden=false; if(loadingTextEl) loadingTextEl.textContent=text; } }
 function hideLoading(){ if(loadingEl) loadingEl.hidden=true; }
 function clearOverlay(){ try{ ctx.clearRect(0,0,canvas.width,canvas.height); }catch(e){} }
@@ -81,13 +121,33 @@ async function startCamera(facing){
   if(currentStream){ try{ currentStream.getTracks().forEach(t=>t.stop()); }catch(e){} currentStream=null; }
   // hide fallback while trying
   if(cameraFallback) cameraFallback.hidden=true;
+  // guard navigator.mediaDevices (iOS missing without fallback)
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ throw new Error('mediaDevices not available'); }
   try{
-    const constraints = { video: { facingMode: facingMode } };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    // iOS back camera default: ideal facingMode environment, fallback to exact then generic
+    let stream=null;
+    try{
+      const constraints = { video: { facingMode: { ideal: facingMode } } };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    }catch(errIdeal){
+      try{
+        const constraints2 = { video: { facingMode: facingMode } };
+        stream = await navigator.mediaDevices.getUserMedia(constraints2);
+      }catch(err2){
+        const constraints3 = { video: true };
+        stream = await navigator.mediaDevices.getUserMedia(constraints3);
+      }
+    }
     currentStream = stream;
     if(video){
       video.srcObject = stream;
       video.hidden = false;
+      // iOS guard: always playsinline muted autoplay (our earlier voice app pattern)
+      try{ video.setAttribute('playsinline',''); video.playsInline=true; video.muted=true; video.autoplay=true; }catch(e){}
+      try{ await video.play(); if(tapStart) tapStart.hidden=true; requestWakeLock(); audioSession('play-and-record'); }catch(playErr){ // autoplay blocked - show Tap to start camera (never black box)
+        if(tapStart){ tapStart.hidden=false; const btn=tapStart.querySelector('button'); if(btn) btn.onclick=async()=>{ try{ await video.play(); tapStart.hidden=true; requestWakeLock(); }catch(e){} updateAskEnabled(); }; }
+        setStatus('Tap to start camera');
+      }
     }
     // if we were frozen, go live now? Only on explicit switch, keep frozen? Spec says switching stops old and starts new one; we show live.
     if(isFrozen){
@@ -104,10 +164,22 @@ async function startCamera(facing){
     setStatus('Camera ready');
     sendClientEvent('camera_selected', facingMode==='environment' ? 'back' : 'front');
     if(cameraFallback) cameraFallback.hidden=true;
+    // enable Ask only after video has dimensions (guard against blank)
+    updateAskEnabled();
+    // video may need time to get dimensions; listen for metadata
+    if(video){
+      const onReady=()=> updateAskEnabled();
+      video.addEventListener('loadedmetadata', onReady, {once:true});
+      video.addEventListener('canplay', onReady, {once:true});
+      // iOS fallback: check again after short delay
+      setTimeout(updateAskEnabled, 400);
+      setTimeout(updateAskEnabled, 1200);
+    }
   }catch(e){
     const name = e && e.name ? e.name : '';
     let msg='';
-    if(name==='NotAllowedError' || name==='PermissionDeniedError') msg='Camera permission denied — allow access or choose a photo';
+    // permission messages reuse an earlier voice project mic pattern: instruct to allow in browser settings
+    if(name==='NotAllowedError' || name==='PermissionDeniedError') msg='I do not have permission to use the camera. Allow it for this site in the browser settings and try again, or choose a photo.';
     else if(name==='NotFoundError' || name==='DevicesNotFoundError') msg='No camera found — choose a photo instead';
     else if(name==='NotReadableError' || name==='AbortError') msg='Camera busy — close other apps or choose a photo';
     else if(name==='OverconstrainedError') msg='Selected camera not available — try the other';
@@ -123,6 +195,7 @@ async function startCamera(facing){
     if(!isFrozen && preview && preview.hidden){
       if(video) video.hidden=true;
     }
+    updateAskEnabled();
   }
 }
 
@@ -133,25 +206,49 @@ function captureLiveFrame(){
     const usePreview = (preview && !preview.hidden && preview.src) && (!currentStream || (video && video.hidden));
 
     if(usePreview){
-      const img = new Image();
-      img.onload = ()=>{
+      // iOS gallery: handle EXIF orientation via createImageBitmap with imageOrientation from-image (our earlier voice app pattern), fallback to <img> decode
+      (async()=>{
         try{
-          const maxSide=1280;
-          const w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
-          const scale=Math.min(1, maxSide/Math.max(w,h));
-          const cw=Math.round(w*scale), ch=Math.round(h*scale);
-          const c=document.createElement('canvas');
-          c.width=cw; c.height=ch;
-          const cx=c.getContext('2d');
-          cx.drawImage(img,0,0,cw,ch);
-          const dataUrl=c.toDataURL('image/jpeg',0.85);
-          const b64=dataUrl.split(',')[1]||'';
-          const bytes=Math.round(b64.length*3/4);
-          resolve({dataUrl, width:cw, height:ch, bytes});
+          if(typeof createImageBitmap==='function'){
+            try{
+              const resp = await fetch(preview.src);
+              const blob = await resp.blob();
+              const bmp = await createImageBitmap(blob, {imageOrientation:'from-image'});
+              const maxSide=1280;
+              const scale=Math.min(1, maxSide/Math.max(bmp.width,bmp.height));
+              const cw=Math.round(bmp.width*scale), ch=Math.round(bmp.height*scale);
+              const c=document.createElement('canvas'); c.width=cw; c.height=ch;
+              const cx=c.getContext('2d');
+              cx.drawImage(bmp,0,0,cw,ch);
+              try{ bmp.close(); }catch(e){}
+              const dataUrl=c.toDataURL('image/jpeg',0.85);
+              const b64=dataUrl.split(',')[1]||'';
+              const bytes=Math.round(b64.length*3/4);
+              resolve({dataUrl, width:cw, height:ch, bytes});
+              return;
+            }catch(bmpErr){ /* fall through to img fallback */ }
+          }
+          const img = new Image();
+          img.onload = ()=>{
+            try{
+              const maxSide=1280;
+              const w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+              const scale=Math.min(1, maxSide/Math.max(w,h));
+              const cw=Math.round(w*scale), ch=Math.round(h*scale);
+              const c=document.createElement('canvas'); c.width=cw; c.height=ch;
+              const cx=c.getContext('2d');
+              cx.drawImage(img,0,0,cw,ch);
+              const dataUrl=c.toDataURL('image/jpeg',0.85);
+              const b64=dataUrl.split(',')[1]||'';
+              const bytes=Math.round(b64.length*3/4);
+              resolve({dataUrl, width:cw, height:ch, bytes});
+            }catch(err){ reject(err); }
+          };
+          img.onerror = ()=> reject(new Error('image load failed'));
+          // decode fallback if available
+          try{ if(img.decode) { img.src=preview.src; await img.decode(); } else { img.src=preview.src; } }catch(e){ img.src=preview.src; }
         }catch(err){ reject(err); }
-      };
-      img.onerror = ()=> reject(new Error('image load failed'));
-      img.src=preview.src;
+      })();
       return;
     }
     // live video path
@@ -159,25 +256,11 @@ function captureLiveFrame(){
       reject(new Error('no video'));
       return;
     }
-    // need video dimensions
+    // capture guard: need video dimensions, else blank
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if(!vw || !vh){
-      // fallback to rect
-      const rect=video.getBoundingClientRect();
-      const cw=Math.min(1280, Math.round(rect.width));
-      const ch=Math.min(1280, Math.round(rect.height));
-      // draw video anyway (may be 0)
-      try{
-        const c=document.createElement('canvas');
-        c.width=cw; c.height=ch;
-        const cx=c.getContext('2d');
-        cx.drawImage(video,0,0,cw,ch);
-        const dataUrl=c.toDataURL('image/jpeg',0.85);
-        const b64=dataUrl.split(',')[1]||'';
-        const bytes=Math.round(b64.length*3/4);
-        resolve({dataUrl, width:cw, height:ch, bytes});
-      }catch(err){ reject(err); }
+      reject(new Error('video_not_ready'));
       return;
     }
     const maxSide=1280;
@@ -188,6 +271,14 @@ function captureLiveFrame(){
     const cx=c.getContext('2d');
     try{
       cx.drawImage(video,0,0,cw,ch);
+      // iOS blank/black frame guard
+      try{
+        const imgData = cx.getImageData(0,0, Math.min(cw,64), Math.min(ch,64));
+        if(isBlankImageData(imgData)){
+          reject(new Error('blank_frame'));
+          return;
+        }
+      }catch(blankErr){ /* ignore if getImageData fails due to taint */ }
       const dataUrl=c.toDataURL('image/jpeg',0.85);
       const b64=dataUrl.split(',')[1]||'';
       const bytes=Math.round(b64.length*3/4);
@@ -216,6 +307,7 @@ function freezeFrame(dataUrl, width, height){
 }
 
 function resetToLive(){
+  updateAskEnabled();
   if(!isFrozen) {
     // still check if we need to clear answer on edit? Only if was frozen
     // but spec says after answer, editing goes back to live preview, so we should reset if we have lastRegions shown
@@ -236,6 +328,7 @@ function resetToLive(){
     pendingFrameId=null;
     pendingRequestId=null;
     syncOverlaySize();
+    updateAskEnabled();
   } else {
     // if not frozen but user edits, just hide hint/retry
     if(questionHint) questionHint.hidden=true;
@@ -279,6 +372,7 @@ function captureFromFile(file){
     clearOverlay();
     clearAnswer();
     isFrozen=true; // preview is frozen already
+    updateAskEnabled();
     // send photo_selected for backward compat
     sendClientEvent('photo_selected', 'bytes:'+file.size+' '+img.naturalWidth+'x'+img.naturalHeight);
   };
@@ -427,14 +521,21 @@ async function ask(){
     return;
   }
   if(questionHint) questionHint.hidden=true;
-  // capture frame
+  // capture frame with iOS guards
   let captured=null;
   try{
     captured=await captureLiveFrame();
   }catch(e){
-    setStatus('No image to send — allow camera or choose a photo');
+    const msg = e && e.message || '';
+    if(msg==='blank_frame'){
+      setStatus('Captured image was blank — try again with camera ready');
+    } else if(msg==='video_not_ready'){
+      setStatus('Camera not ready — wait a moment and try again');
+    } else {
+      setStatus('No image to send — allow camera or choose a photo');
+    }
     if(retryBtn) retryBtn.hidden=false;
-    sendClientEvent('ask_failed', 'no_image');
+    sendClientEvent('ask_failed', 'no_image_'+msg);
     return;
   }
   if(!captured || !captured.dataUrl){
@@ -516,7 +617,7 @@ async function ask(){
   }finally{
     clearInterval(stageInterval);
     asking=false;
-    if(askBtn) askBtn.disabled=false;
+    updateAskEnabled();
     abortController=null;
     hideLoading();
   }
@@ -625,9 +726,34 @@ if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
   });
 }
 
-video.onloadedmetadata=syncOverlaySize;
-if(preview) preview.onload=syncOverlaySize;
-window.onresize=syncOverlaySize;
+video.onloadedmetadata=()=>{ syncOverlaySize(); updateAskEnabled(); };
+video.oncanplay=()=>{ syncOverlaySize(); updateAskEnabled(); };
+video.onplay=()=>{ updateAskEnabled(); };
+if(preview) preview.onload=()=>{ syncOverlaySize(); updateAskEnabled(); };
+// iOS guards: navigator.mediaDevices availability already checked in startCamera; handle missing APIs with fallbacks
+// ResizeObserver guard (our earlier voice app pattern: fallback to resize)
+try{ if(typeof ResizeObserver!=='undefined'){ const ro=new ResizeObserver(()=> syncOverlaySize()); const wrap=document.getElementById('cameraWrap'); if(wrap) ro.observe(wrap); }}catch(e){}
+// AbortSignal.timeout guard: wrap in try/catch and fallback to AbortController+setTimeout (already used)
+function timeoutSignal(ms){ try{ if(typeof AbortSignal!=='undefined' && typeof AbortSignal.timeout==='function') return AbortSignal.timeout(ms); }catch(e){} const c=new AbortController(); setTimeout(()=>c.abort(), ms); return c.signal; }
+window.onresize=()=>{ syncOverlaySize(); updateAskEnabled(); };
+// iOS orientation change
+window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{ syncOverlaySize(); updateAskEnabled(); }, 300); });
+// visibilitychange: stop tracks when hidden, restart when visible (our earlier voice app pattern)
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible'){ if(!currentStream && !isFrozen){ startCamera(currentFacing); } try{ if(video && video.paused && currentStream) video.play(); }catch(e){} requestWakeLock(); }
+  else { try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} audioSession('auto'); }
+});
+window.addEventListener('pagehide', ()=>{ try{ if(currentStream) currentStream.getTracks().forEach(t=>t.stop()); }catch(e){} releaseWakeLock(); });
+// visualViewport keyboard handling: keep question input above keyboard (an earlier voice project ~617)
+if(window.visualViewport){
+  const vv=visualViewport, container=document.querySelector('.container'), qCard=document.querySelector('.question-card');
+  const sh=qCard||container;
+  const f=()=>{ if(!sh) return; const kbdOpen = window.innerHeight - vv.height > 120; document.documentElement.classList.toggle('kbd', kbdOpen); if(sh){ sh.style.transform = vv.offsetTop ? 'translateY('+vv.offsetTop+'px)' : ''; } if(window.scrollY) try{ window.scrollTo(0,0); }catch(e){} };
+  vv.addEventListener('resize', f); vv.addEventListener('scroll', f); window.addEventListener('scroll', f); f();
+}
+document.addEventListener('focusin', e=>{ if(e.target.closest('.question-card') && e.target.matches('input:not([type=checkbox]),textarea,select')){ const t=e.target; setTimeout(()=>{ try{ t.scrollIntoView({block:'center', behavior:'smooth'}); }catch(err){} }, 320); } });
+document.addEventListener('focusin', e=>{ if(e.target.matches('#question')){ const app=document.querySelector('.container'); if(app) app.classList.add('kb'); setTimeout(()=>{ try{ const th=document.documentElement; th.scrollTop=th.scrollHeight; }catch(er){} },300); } });
+document.addEventListener('focusout', e=>{ if(e.target.matches('#question')) setTimeout(()=>{ if(document.activeElement!==document.getElementById('question')){ const app=document.querySelector('.container'); if(app) app.classList.remove('kb'); } },100); });
 
 // enhance setStatus to show retry on errors (but spec says Retry shown ONLY after error)
 const _origSetStatus=setStatus;
@@ -644,6 +770,7 @@ setStatus=function(msg){
 
 // init: read localStorage for facing, default Back
 (async()=>{
+  if(askBtn) askBtn.disabled=true; // guard until camera ready
   let saved=null;
   try{ saved=localStorage.getItem('cameraFacing'); }catch(e){}
   if(saved==='user') currentFacing='user';

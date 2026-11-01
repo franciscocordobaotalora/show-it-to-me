@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#242526" media="(prefers-color-scheme: dark)" />
 <title>Show It To Me</title>
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -27,6 +31,10 @@
       <div id="loading" class="loading" hidden>
         <div class="spinner" aria-hidden="true"></div>
         <p class="loading-text">Looking at the photo…</p>
+      </div>
+      <div id="tapStart" class="tap-start" hidden>
+        <button type="button" class="btn btn-primary">Tap to start camera</button>
+        <p>Camera needs a tap on iPhone</p>
       </div>
     </div>
     <div id="cameraFallback" class="camera-fallback" hidden>
