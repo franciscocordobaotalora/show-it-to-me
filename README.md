@@ -27,7 +27,7 @@ Every model in this project, what it did, and where it ran. Both Muse open-weigh
 | Muse Spark Open (`meta-models/muse-spark-open-1026`, open weight) | Baseten (hackathon partner inference) | The coding agent that wrote most of the app (about 1,500 steps), and the photo answers for a day until the credit ran out |
 | Muse Voice Transcribe (`muse-voice-transcribe-1.0`) | Meta Model API, called with our key | Turns the spoken question into text |
 | Muse Spark 1.3 (`muse-spark-1.3`) | Meta Model API, called with our key | Reads the photo and the question and writes the answer. In use since 2026-11-01, after the Baseten credit ran out |
-| SAM 3.1 (`sam-3.1`) | Meta Model API, called with our key | Planned replacement for the local SAM 3 so no GPU is needed to serve the app |
+| SAM 3.1 (`sam-3.1`) | Meta Model API, called with our key | Cuts the part out of the photo for the live site since 2026-11-01 (`SAM_BACKEND=meta`), so serving needs no GPU. The local SAM 3 stays in the repo as the measuring bench and the fallback |
 | Speech engine (CPU) | Our own server | Speaks the answer aloud |
 
 How we built it: we developed and measured everything locally on our own hardware (local Glimmer and SAM 3, our own benchmarks and numbers), then moved the live serving to hosted keys. The live site only needs API keys, no GPU. The prize rules ask for Meta open-weight models, so the open-weight ones (Glimmer, Spark Open, SAM 3) are the ones we developed, measured and coded with, and the README says plainly which hosted model answers today.
@@ -67,6 +67,8 @@ Env variables:
 * `META_ASR_URL` - override ASR endpoint for tests
 
 Request is `POST /api/analyze` with frameId, requestId, question, and image as data URL. Response returns frameId, requestId, view, needs_view, regions with polygons and provenance with timings and selection debug.
+
+Segmentation backend: `SAM_BACKEND=local` (default) runs SAM 3 on a GPU through `server/sam.py`; `SAM_BACKEND=meta` calls Meta's hosted `sam-3.1` through `server/sam_meta.py`, with no torch and no GPU. The hosted answer is a text format with a box and a compressed mask per match; it is decoded with Meta's official `meta_sam_parser` (copied into `server/vendor/` with its SAM License). Text prompts find large objects but miss small parts (USB-C port, brake caliper), so the server also sends Muse's box as a box prompt and picks the candidate that overlaps Muse's box. Measured on 2026-11-01 through the real pipeline (Muse Spark 1.3 plus hosted SAM 3.1): 5.8 to 9.2 s per photo request on five photos, against 9 to 28 s with the local SAM 3 and Baseten. Tests: `server/test_sam_meta.py` (real masks encoded with the official codec, Meta call mocked).
 
 ## Logging
 

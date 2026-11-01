@@ -585,3 +585,14 @@ def _load():
 def segment(image_pil, target):
     session = SamSession(image_pil)
     return session.segment(target)
+
+
+# Backend switch: SAM_BACKEND=meta serves SAM 3.1 from Meta Model API (no GPU, no torch). Default stays the local SAM 3.
+if os.getenv('SAM_BACKEND', 'local') == 'meta':
+    import sam_meta as _sam_meta
+
+    def _load():
+        _sam_meta.load()
+
+    def segment(image_pil, target):
+        return _sam_meta.segment(image_pil, target)
