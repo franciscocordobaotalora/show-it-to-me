@@ -75,6 +75,13 @@ body{
   flex:1;min-width:120px;max-width:100%;
   height:44px;padding:0 12px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;transition:var(--transition)
 }
+.camera-select .btn-chip.active{background:var(--meta-blue);color:#fff;border-color:var(--meta-blue);}
+.camera-fallback{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 4px}
+.camera-fallback[hidden]{display:none !important}
+.fallback-msg{margin:0;font-size:13px;color:var(--text-secondary);text-align:center}
+.fallback-link{background:none;border:none;color:var(--meta-blue);font-size:13px;font-weight:600;cursor:pointer;text-decoration:underline;padding:4px 8px;min-height:32px}
+.hint{font-size:13px;color:#d93025;background:#fbe9e7;border:1px solid #f5c6c2;border-radius:8px;padding:6px 10px}
+.hint[hidden]{display:none !important}
 .camera-wrap{
   position:relative;
   background:#000;
@@ -124,7 +131,12 @@ body{
 .controls .btn-primary{width:100%}
 .demo-toggle{font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:6px}
 .demo-toggle input{width:16px;height:16px}
+/* Ask button is primary pill 44px high as required */
+#ask.btn-primary{min-height:44px;height:44px;padding:0 24px;min-width:80px}
+/* question input empty placeholder still styled */
+#question::placeholder{color:var(--text-secondary);opacity:0.6}
 .answer{line-height:1.6;font-size:15px;color:var(--text)}
+[hidden]{display:none !important}
 .answer[hidden]{display:none !important}
 .answer a{color:var(--meta-blue);word-break:break-all}
 .zoom-modal{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:16px}

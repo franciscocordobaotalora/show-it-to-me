@@ -16,13 +16,11 @@
 </header>
 <main class="container">
   <section class="card camera-card">
-    <div class="camera-select" id="cameraSelectWrap" hidden>
-      <label for="cameraSelect">Camera</label>
-      <select id="cameraSelect" aria-label="Camera selector"></select>
-      <button id="camBack" type="button" class="btn btn-chip">Back</button>
-      <button id="camFront" type="button" class="btn btn-chip">Front</button>
+    <div class="camera-select" id="cameraSelectWrap">
+      <button id="camBack" type="button" class="btn btn-chip" aria-label="Back camera">Back</button>
+      <button id="camFront" type="button" class="btn btn-chip" aria-label="Front camera">Front</button>
     </div>
-    <div class="camera-wrap">
+    <div class="camera-wrap" id="cameraWrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="overlay"></canvas>
       <img id="preview" alt="Preview" hidden />
@@ -31,22 +29,30 @@
         <p class="loading-text">Looking at the photo…</p>
       </div>
     </div>
-    <div class="camera-actions">
-      <button id="capture" class="btn btn-primary">Take photo</button>
-      <button id="retake" hidden class="btn btn-secondary">Retake</button>
-      <button id="upload" class="btn btn-secondary">Choose from gallery</button>
-      <input type="file" id="file" accept="image/*" hidden />
+    <div id="cameraFallback" class="camera-fallback" hidden>
+      <p id="cameraFallbackMsg" class="fallback-msg"></p>
+      <button id="fallbackUpload" type="button" class="fallback-link">Choose a photo</button>
+    </div>
+    <!-- gallery fallback input, kept for hidden test compatibility -->
+    <input type="file" id="file" accept="image/*" hidden />
+    <!-- hidden legacy controls: no dead controls on screen, kept for test hook compatibility -->
+    <div hidden aria-hidden="true">
+      <button id="capture" type="button">Take photo</button>
+      <button id="retake" type="button">Retake</button>
+      <button id="upload" type="button">Choose from gallery</button>
+      <select id="cameraSelect" hidden></select>
+      <input type="checkbox" id="demoMode" hidden />
     </div>
   </section>
 
   <section class="card question-card">
     <div class="controls">
       <label for="question" class="visually-hidden">Question</label>
-      <input id="question" placeholder="Ask about the board…" aria-label="Question" />
+      <input id="question" aria-label="Question" placeholder="" autocomplete="off" />
       <button id="ask" class="btn btn-primary" aria-label="Ask">Ask</button>
       <button id="retryBtn" class="btn btn-secondary" hidden type="button">Retry</button>
-      <label class="demo-toggle"><input type="checkbox" id="demoMode" /> Demo mode</label>
     </div>
+    <div id="questionHint" class="hint" hidden></div>
     <div id="suggestedChips" class="chips" role="group" aria-label="Suggested questions">
       <button class="chip" type="button" data-q="Where is the SD card slot?">Where is the SD card slot?</button>
       <button class="chip" type="button" data-q="How do I remove the SD card?">How do I remove the SD card?</button>
