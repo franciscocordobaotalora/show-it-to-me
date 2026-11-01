@@ -67,20 +67,50 @@ img,video,canvas{max-width:100%;box-sizing:border-box}
 #designA .container{height:100%;flex:1;min-height:0}
 .camera-card{margin:0 16px;padding:0;overflow:hidden;border-radius:24px;flex:0 0 42vh;flex:0 0 42dvh;height:42vh;height:42dvh;min-height:180px;max-height:42vh;max-height:42dvh;display:flex;flex-direction:column;position:relative}
 .camera-wrap{position:relative;overflow:hidden;background:#111;flex:1;min-height:180px;display:flex;align-items:center;justify-content:center}
-.camera-wrap video{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0}
-.camera-wrap canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-#highlightSVG{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:block}
+.camera-wrap video{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;z-index:0}
+.camera-wrap canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
+#highlightSVG{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:block;z-index:2}
 #highlightSVG[hidden]{display:none!important}
 .hl path{fill:rgba(8,102,255,.28);stroke:#fff;stroke-width:3;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 6px rgba(8,102,255,.9));stroke-dasharray:1200;stroke-dashoffset:1200;animation:draw 1s .1s forwards}
+/* --- cinematic drawing sequence (best part) --- */
 @keyframes draw{to{stroke-dashoffset:0}}
-#highlightSVG.hl path{fill:rgba(8,102,255,.28);stroke:#fff;stroke-width:3;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 6px rgba(8,102,255,.9));stroke-dasharray:1200;stroke-dashoffset:1200;animation:draw 1s .1s forwards}
-#preview{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0}
+@keyframes sweepMove{0%{transform:translateX(-130%)} 100%{transform:translateX(230%)}}
+@keyframes shimmerPass{0%{transform:translate(-60%,-60%) rotate(25deg)} 100%{transform:translate(60%,60%) rotate(25deg)}}
+@keyframes rippleRing{0%{transform:translate(-50%,-50%) scale(.2); opacity:.6} 100%{transform:translate(-50%,-50%) scale(2.2); opacity:0}}
+@keyframes chipPop{0%{transform:translate(-50%,-100%) scale(.6); opacity:0} 60%{transform:translate(-50%,-100%) scale(1.06); opacity:1} 80%{transform:translate(-50%,-100%) scale(.98)} 100%{transform:translate(-50%,-100%) scale(1); opacity:1}}
+@keyframes breathe{0%,100%{opacity:1} 50%{opacity:.7}}
+@keyframes cometTravel{0%{stroke-dashoffset:1200; opacity:1} 70%{opacity:1} 100%{stroke-dashoffset:0; opacity:1}}
+@keyframes fillBloom{0%{opacity:0; transform:scale(.7)} 100%{opacity:1; transform:scale(1)}}
+.draw-layer{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:2;pointer-events:none}
+.sweep{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden}
+.sweep::before{content:"";position:absolute;top:-10%;bottom:-10%;left:0;width:36px;background:linear-gradient(90deg, transparent, rgba(255,255,255,.9) 40%, rgba(8,102,255,.75) 50%, transparent);filter:drop-shadow(0 0 10px rgba(8,102,255,.9));transform:translateX(-130%);animation:sweepMove .5s ease-out forwards}
+.sweep.active::before{animation:sweepMove .5s ease-out forwards}
+.ripple{position:absolute;z-index:2;pointer-events:none;width:40px;height:40px;border:2px solid rgba(8,102,255,.9);border-radius:50%;left:50%;top:50%;transform:translate(-50%,-50%) scale(.2);opacity:0}
+.ripple.go{animation:rippleRing .9s ease-out forwards}
+.shimmer{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden;opacity:0;mix-blend-mode:overlay}
+.shimmer::after{content:"";position:absolute;inset:-30%;background:linear-gradient(105deg, transparent 40%, rgba(255,255,255,.35) 50%, transparent 60%);transform:translate(-60%,-60%) rotate(25deg)}
+.shimmer.go{opacity:1}
+.shimmer.go::after{animation:shimmerPass .7s .1s ease-out forwards}
+.camera-wrap.is-drawing #highlightSVG.hl path{animation:none;stroke-dasharray:1200;stroke-dashoffset:1200}
+.camera-wrap.is-drawing.comet #highlightSVG.hl path{animation:cometTravel .7s .3s forwards;filter:drop-shadow(0 0 8px rgba(8,102,255,.9)) drop-shadow(0 0 18px rgba(8,102,255,.45));stroke-width:3}
+.camera-wrap.is-drawing.bloom #highlightSVG.hl path{fill:rgba(8,102,255,.28);animation:fillBloom .4s ease-out forwards;transform-origin:center}
+.camera-wrap.breathing #highlightSVG.hl path{animation:breathe 2.4s ease-in-out infinite}
+.highlight-chip.pop{animation:chipPop .45s cubic-bezier(.34,1.56,.64,1) forwards}
+#highlightSVG.hl path{fill:rgba(8,102,255,.28);stroke:#fff;stroke-width:3;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 6px rgba(8,102,255,.9)) drop-shadow(0 0 18px rgba(8,102,255,.35));stroke-dasharray:1200;stroke-dashoffset:1200;animation:draw 1s .1s forwards}
+@media (prefers-reduced-motion: reduce){
+  .sweep,.ripple,.shimmer{display:none!important}
+  .camera-wrap.is-drawing.comet #highlightSVG.hl path{animation:none!important;stroke-dashoffset:0!important;transition:opacity .15s, stroke-dashoffset .15s}
+  #highlightSVG.hl path{animation:none!important;stroke-dashoffset:0!important;transition:opacity .15s}
+  .highlight-chip.pop{animation:none!important;transform:translate(-50%,-100%) scale(1)!important;transition:opacity .15s, transform .15s}
+}
+#preview{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0;z-index:1}
 #preview[hidden]{display:none!important}
 .camera-skeleton{position:absolute;inset:0;background:linear-gradient(90deg,#e5e7eb 25%,#f0f2f5 50%,#e5e7eb 75%);background-size:200% 100%;animation:skeleton 1.4s ease-in-out infinite;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:var(--mute);font-size:14px}
 .camera-skeleton .skeleton-wave{width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.06)}
 @keyframes skeleton{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .camera-wrap.has-frame .camera-skeleton{display:none}
-.flip-btn{position:absolute;right:12px;top:12px;width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.45);color:#fff;display:grid;place-items:center;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:0}
+.highlight-chip{position:absolute;transform:translate(-50%,-100%);background:#E7F0FF;color:#0A52CC;border-radius:999px;padding:4px 10px;font-size:13px;font-weight:700;line-height:1;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.15);z-index:3;pointer-events:none;max-width:90%;overflow:hidden;text-overflow:ellipsis}
+.flip-btn{position:absolute;right:12px;top:12px;width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.45);color:#fff;display:grid;place-items:center;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:0;z-index:4}
 .flip-btn[hidden]{display:none!important}
 
 .loading{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#fff}
@@ -126,6 +156,12 @@ img,video,canvas{max-width:100%;box-sizing:border-box}
 .hero-live-btn{height:56px;min-width:80px;min-height:48px;padding:0 22px;border-radius:999px;background:var(--blue);color:#fff;font-weight:700;font-size:17px;display:inline-flex;align-items:center;gap:10px;box-shadow:0 6px 18px rgba(8,102,255,.35);transition:transform .15s,background .2s;flex:none}
 .hero-live-btn:active{transform:scale(.96)}
 .hero-live-btn.active{background:var(--red);box-shadow:0 6px 18px rgba(228,38,61,.35)}
+.hero-live-btn.is-ask-another{background:linear-gradient(135deg,#0866FF,#2e7dfe);color:#fff;box-shadow:0 6px 18px rgba(8,102,255,.35)}
+/* photo cross-fade scale settle handled inline */
+#preview{transition:opacity 350ms ease, transform 350ms ease, filter 350ms ease}
+.camera-wrap.is-frozen #preview{filter:none}
+.camera-wrap.is-frozen .sweep,.camera-wrap.is-frozen .ripple,.camera-wrap.is-frozen #dimCanvas{will-change:opacity, transform, filter}
+
 .wave-glyph{display:inline-flex;align-items:center;gap:6px}
 .wave-glyph svg{flex:none}
 .bottom-spacer{height:80px;flex:none}

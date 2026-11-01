@@ -498,15 +498,30 @@ test.describe('Legacy simulated regression (adapted for T07)', () => {
     await typeAndAsk(page, 'show parts');
     await page.waitForTimeout(800);
     const { inside, outside } = await page.locator('#overlay').evaluate(el => {
-      const ctx = el.getContext('2d');
-      const { width, height } = el;
-      const data = ctx.getImageData(0,0,width,height).data;
-      const cx1 = Math.floor(width*0.25), cy1 = Math.floor(height*0.25);
-      const cx2 = Math.floor(width*0.65), cy2 = Math.floor(height*0.65);
-      const idx = (x,y) => ((y*width + x)*4 + 3);
-      const a = data[idx(cx1,cy1)];
-      const b = data[idx(cx2,cy2)];
-      const c = data[idx(10,10)];
+      const canvas=el;
+      const wrap=document.getElementById('cameraWrap');
+      const rect=wrap?wrap.getBoundingClientRect():{width:canvas.clientWidth, height:canvas.clientHeight};
+      const cssW=rect.width, cssH=rect.height;
+      // frame dimensions for this synthetic capture are 640x480 (mockCameraSuccess) fallback, but we use same as test expects: 640x480?
+      // For cover mapping we need imgW/imgH - approximate as 640x480 if not provided; use stored lastFrame if available
+      let imgW=640, imgH=480;
+      try{ const lf=window.lastFrame; if(lf && lf.width) { imgW=lf.width; imgH=lf.height; } }catch(e){}
+      // also check global currentFrame
+      try{ if(window.currentFrame && window.currentFrame.width){ imgW=window.currentFrame.width; imgH=window.currentFrame.height; } }catch(e){}
+      function coverMap(px,py,boxW,boxH,imgW,imgH){ const s=Math.max(boxW/imgW, boxH/imgH); const ox=(boxW-imgW*s)/2; const oy=(boxH-imgH*s)/2; return {x: ox+px*imgW*s, y: oy+py*imgH*s}; }
+      const dpr=window.devicePixelRatio||1;
+      const ctx=canvas.getContext('2d');
+      ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+      const w=canvas.width, h=canvas.height;
+      const data=ctx.getImageData(0,0,w,h).data;
+      ctx.restore();
+      const idx=(x,y)=> ((Math.floor(y)*w + Math.floor(x))*4+3);
+      // sample inside each polygon via cover-mapped centroid
+      const c1=coverMap(0.25,0.25, cssW, cssH, imgW, imgH);
+      const c2=coverMap(0.65,0.65, cssW, cssH, imgW, imgH);
+      const a=data[idx(Math.floor(c1.x*dpr), Math.floor(c1.y*dpr))];
+      const b=data[idx(Math.floor(c2.x*dpr), Math.floor(c2.y*dpr))];
+      const c=data[idx(5,5)];
       return { inside: a>0 && b>0, outside: c===0 };
     });
     expect(inside).toBeTruthy();

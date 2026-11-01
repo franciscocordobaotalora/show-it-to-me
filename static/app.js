@@ -173,8 +173,15 @@ function setAppState(next, detail){
       else if(next==='thinking') ind.innerHTML='<span class="dots"><i></i><i></i><i></i></span>';
       else ind.innerHTML='';
     }
-    // heroLiveBtn toggle: blue Live with waveform glyph -> red Stop with square
-    const hero=document.getElementById('heroLiveBtn'); if(hero){ const active=['listening','hearing','thinking','speaking'].includes(next); hero.classList.toggle('active', active); hero.setAttribute('aria-label', active?'Stop live mode':'Start live mode'); const label=hero.querySelector('.live-label'); if(label) label.textContent=active?'Stop':'Live'; const glyph=document.querySelector('#heroLiveBtn .wave-glyph'); if(glyph){ const liveSvg=glyph.querySelector('.glyph-live'); const stopSvg=glyph.querySelector('.glyph-stop'); if(liveSvg) liveSvg.hidden=active; if(stopSvg) stopSvg.hidden=!active; } }
+    // heroLiveBtn toggle: blue Live/Stop or Ask another after answer
+    const hero=document.getElementById('heroLiveBtn'); if(hero){
+      if(next==='answer'){
+        hero.classList.remove('active'); hero.classList.add('is-ask-another'); hero.setAttribute('aria-label','Ask another'); const label=hero.querySelector('.live-label'); if(label) label.textContent='Ask another'; hero.style.background='linear-gradient(135deg,#0866FF,#2e7dfe)'; const glyph=document.querySelector('#heroLiveBtn .wave-glyph'); if(glyph){ const liveSvg=glyph.querySelector('.glyph-live'); const stopSvg=glyph.querySelector('.glyph-stop'); if(liveSvg) liveSvg.hidden=true; if(stopSvg) stopSvg.hidden=true; glyph.hidden=true; }
+      } else {
+        hero.classList.remove('is-ask-another'); hero.style.background=''; const glyph=document.querySelector('#heroLiveBtn .wave-glyph'); if(glyph) glyph.hidden=false;
+        const active=['listening','hearing','thinking','speaking'].includes(next); hero.classList.toggle('active', active); hero.setAttribute('aria-label', active?'Stop live mode':'Start live mode'); const label=hero.querySelector('.live-label'); if(label) label.textContent=active?'Stop':'Live'; const g=document.querySelector('#heroLiveBtn .wave-glyph'); if(g){ const liveSvg=g.querySelector('.glyph-live'); const stopSvg=g.querySelector('.glyph-stop'); if(liveSvg) liveSvg.hidden=active; if(stopSvg) stopSvg.hidden=!active; }
+      }
+    }
     const wrap=document.getElementById('cameraWrap'); if(wrap){ if(next!=='idle' && (video && video.videoWidth || preview && !preview.hidden)) wrap.classList.add('has-frame'); }
   }catch(e){}
   // Design B top bar mirror
@@ -432,29 +439,154 @@ function getActiveMedia(){
   }
   return (preview && !preview.hidden) ? preview : video;
 }
+// Cover transform helper: maps normalized polygon point through object-fit:cover
+function coverMap(px, py, boxW, boxH, imgW, imgH){
+  const scale = Math.max(boxW / imgW, boxH / imgH);
+  const offX = (boxW - imgW * scale) / 2;
+  const offY = (boxH - imgH * scale) / 2;
+  return { x: offX + px * imgW * scale, y: offY + py * imgH * scale, scale, offX, offY };
+}
 function syncOverlaySize(){
-  // Sync main canvas
+  // Main canvas sized to CSS box * devicePixelRatio
   try{
-    const media = getActiveMedia();
-    if(media && !media.hidden){
-      const rect = media.getBoundingClientRect();
-      let w=0,h=0;
-      if(media.tagName==='VIDEO'){ w=media.videoWidth||rect.width; h=media.videoHeight||rect.height; } else { w=media.naturalWidth||rect.width; h=media.naturalHeight||rect.height; }
-      if(canvas && w && h){ canvas.width=w; canvas.height=h; canvas.style.width=rect.width+'px'; canvas.style.height=rect.height+'px'; }
+    const wrap = document.getElementById('cameraWrap');
+    if(wrap && canvas){
+      const rect = wrap.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      canvas.width = w; canvas.height = h;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+      canvas._cssW = rect.width; canvas._cssH = rect.height; canvas._dpr = dpr;
+      // scale context for CSS pixel drawing; reset then scale
+      try{ ctx.setTransform(dpr,0,0,dpr,0,0); }catch(e){}
     }
   }catch(e){}
-  // Sync B canvas separately
+  // B canvas separately
   try{
-    const bMedia = (previewB && !previewB.hidden) ? previewB : videoB;
-    if(bMedia && !bMedia.hidden && canvasB){
-      const rect = bMedia.getBoundingClientRect();
-      let w=0,h=0;
-      if(bMedia.tagName==='VIDEO'){ w=bMedia.videoWidth||rect.width; h=bMedia.videoHeight||rect.height; } else { w=bMedia.naturalWidth||rect.width; h=bMedia.naturalHeight||rect.height; }
-      if(w&&h){ canvasB.width=w; canvasB.height=h; canvasB.style.width=rect.width+'px'; canvasB.style.height=rect.height+'px'; }
+    const wrapB = document.getElementById('cameraWrapB');
+    if(wrapB && canvasB){
+      const rect = wrapB.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvasB.width = Math.max(1, Math.round(rect.width * dpr));
+      canvasB.height = Math.max(1, Math.round(rect.height * dpr));
+      canvasB.style.width = rect.width+'px'; canvasB.style.height = rect.height+'px';
+      canvasB._cssW = rect.width; canvasB._cssH = rect.height; canvasB._dpr = dpr;
+      try{ ctxB.setTransform(dpr,0,0,dpr,0,0); }catch(e){}
+    } else if(canvasB){
+      // fallback to media rect if no wrapB
+      const bMedia = (previewB && !previewB.hidden) ? previewB : videoB;
+      if(bMedia && !bMedia.hidden){
+        const rect = bMedia.getBoundingClientRect();
+        const dpr = window.devicePixelRatio||1;
+        canvasB.width = Math.max(1, Math.round(rect.width*dpr));
+        canvasB.height = Math.max(1, Math.round(rect.height*dpr));
+        canvasB.style.width = rect.width+'px'; canvasB.style.height = rect.height+'px';
+        canvasB._cssW = rect.width; canvasB._cssH = rect.height; canvasB._dpr = dpr;
+        try{ ctxB.setTransform(dpr,0,0,dpr,0,0);}catch(e){}
+      }
     }
   }catch(e){}
   if(lastRegions.length && lastFrame) drawRegions(lastRegions, lastFrame);
 }
+// keep overlay correct on resize/orientation
+try{ window.addEventListener('resize', ()=> requestAnimationFrame(syncOverlaySize)); window.addEventListener('orientationchange', ()=> setTimeout(syncOverlaySize, 120)); }catch(e){}
+try{ if(typeof ResizeObserver!=='undefined'){ const ro=new ResizeObserver(()=> requestAnimationFrame(syncOverlaySize)); const cw=document.getElementById('cameraWrap'); if(cw) ro.observe(cw); } }catch(e){}
+// --- cinematic helpers ---
+window.__frameTimes=[]; let _frameTimeRAF=null;
+function startFrameMeasure(){ window.__frameTimes=[]; let last=performance.now(), count=0;
+  function tick(now){ const dt=now-last; last=now; if(count<60) window.__frameTimes.push(dt); count++; if(count<60) _frameTimeRAF=requestAnimationFrame(tick); }
+  cancelAnimationFrame(_frameTimeRAF); requestAnimationFrame(tick);
+}
+function getFrameStats(){ const a=window.__frameTimes||[]; if(!a.length) return {p95:0,avg:0}; const s=[...a].sort((x,y)=>x-y); const p95=s[Math.floor(s.length*0.95)]||0; const avg=a.reduce((x,y)=>x+y,0)/a.length; return {p95:+p95.toFixed(2), avg:+avg.toFixed(2), n:a.length}; }
+window.getFrameStats=getFrameStats;
+function drawDimMask(regions, frame){
+  const dim=document.getElementById('dimCanvas'); if(!dim||!regions||!regions.length) return;
+  const wrap=document.getElementById('cameraWrap'); if(!wrap) return;
+  const rect=wrap.getBoundingClientRect(); const cssW=rect.width, cssH=rect.height; const dpr=window.devicePixelRatio||1;
+  const imgW=frame&&frame.width?frame.width:cssW, imgH=frame&&frame.height?frame.height:cssH;
+  dim.width=Math.max(1,Math.round(cssW*dpr)); dim.height=Math.max(1,Math.round(cssH*dpr)); dim.style.width=cssW+'px'; dim.style.height=cssH+'px'; dim._cssW=cssW; dim._cssH=cssH; dim._dpr=dpr;
+  const dctx=dim.getContext('2d'); try{ dctx.setTransform(dpr,0,0,dpr,0,0); }catch(e){}
+  // draw dim outside polygons with feather via shadowBlur
+  // first fill whole with 45% black
+  dctx.save(); dctx.fillStyle='rgba(0,0,0,0.45)'; dctx.fillRect(0,0,cssW,cssH);
+  // cut out polygons with destination-out + blur
+  dctx.globalCompositeOperation='destination-out';
+  dctx.shadowColor='rgba(0,0,0,1)'; dctx.shadowBlur=12;
+  dctx.fillStyle='rgba(0,0,0,1)';
+  regions.forEach(r=>{ if(!r.polygon||r.polygon.length<3) return; const mapped=r.polygon.map(p=> coverMap(p[0],p[1],cssW,cssH,imgW,imgH)); dctx.beginPath(); mapped.forEach((m,i)=>{ if(i===0) dctx.moveTo(m.x,m.y); else dctx.lineTo(m.x,m.y); }); dctx.closePath(); dctx.fill(); });
+  dctx.restore();
+  dim.hidden=false; dim.style.opacity='0';
+  // fade in 300ms
+  dim.style.transition='opacity 300ms ease-out'; requestAnimationFrame(()=>{ dim.style.opacity='1'; });
+}
+function clearDim(){ const dim=document.getElementById('dimCanvas'); if(dim){ try{ const c=dim.getContext('2d'); c.setTransform(1,0,0,1,0,0); c.clearRect(0,0,dim.width,dim.height);}catch(e){} dim.hidden=true; dim.style.opacity=''; dim.style.transition=''; dim.style.transform=''; } }
+function positionRipple(regions, frame){
+  const wrap=document.getElementById('cameraWrap'); const ripple=document.getElementById('ripple'); if(!wrap||!ripple||!regions.length) return null;
+  const rect=wrap.getBoundingClientRect(); const cssW=rect.width, cssH=rect.height; const imgW=frame&&frame.width?frame.width:cssW, imgH=frame&&frame.height?frame.height:cssH;
+  const poly=regions[0].polygon; if(!poly) return null;
+  const mapped=poly.map(p=> coverMap(p[0],p[1],cssW,cssH,imgW,imgH)); let cx=0,cy=0; mapped.forEach(m=>{cx+=m.x; cy+=m.y;}); cx/=mapped.length; cy/=mapped.length;
+  ripple.style.left=cx+'px'; ripple.style.top=cy+'px';
+  return {cx,cy};
+}
+function playCinematic(regions, frame){
+  const wrap=document.getElementById('cameraWrap'); if(!wrap) return;
+  const sweep=document.getElementById('sweep'); const ripple=document.getElementById('ripple'); const shimmer=document.getElementById('shimmer'); const svg=document.getElementById('highlightSVG'); const hc=document.getElementById('highlightChip');
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(reduced){
+    wrap.classList.remove('is-drawing','comet','bloom','breathing'); if(sweep) sweep.hidden=true; if(ripple) ripple.hidden=true; if(shimmer) shimmer.hidden=true; if(svg) svg.style.transition='opacity 150ms'; if(hc) hc.classList.remove('pop'); // final state fade only
+    return;
+  }
+  startFrameMeasure();
+  wrap.classList.add('is-drawing');
+  // delay fill bloom: hide svg fill until 800ms (canvas fill kept but will be overlaid with sweep)
+  const svgPath=document.querySelector('#highlightSVG path');
+  if(svgPath){ svgPath.style.fillOpacity='0'; svgPath.style.transition='fill-opacity 400ms ease-out'; }
+
+  // dim already drawn outside before call; ensure sweep visible
+  if(sweep){ sweep.hidden=false; sweep.classList.remove('active'); void sweep.offsetWidth; sweep.classList.add('active'); setTimeout(()=>{ sweep.hidden=true; sweep.classList.remove('active'); }, 600); }
+  // enhance dim visibility: ensure dim is behind but visible, add feather via filter blur
+  try{ const dim=document.getElementById('dimCanvas'); if(dim){ dim.style.filter='blur(0.5px)'; } }catch(e){}
+  // comet trace 300-1000ms
+  setTimeout(()=>{ wrap.classList.add('comet'); if(svg){ svg.hidden=false; } }, 300);
+  // fill bloom 800-1300: fade in fill + shimmer
+  setTimeout(()=>{
+    wrap.classList.add('bloom');
+    const sp=document.querySelector('#highlightSVG path'); if(sp){ sp.style.fillOpacity='1'; sp.style.fill='rgba(8,102,255,0.28)'; }
+    if(shimmer){ shimmer.hidden=false; shimmer.classList.add('go'); setTimeout(()=>{ shimmer.hidden=true; shimmer.classList.remove('go'); }, 800); }
+  }, 800);
+  // ripple 900
+  if(ripple){
+    setTimeout(()=>{
+      const pos=positionRipple(regions, frame); if(pos){ ripple.hidden=false; ripple.classList.remove('go'); void ripple.offsetWidth; ripple.classList.add('go'); setTimeout(()=>{ ripple.hidden=true; ripple.classList.remove('go'); }, 1000); }
+    }, 900);
+  }
+  // label pop 1000
+  if(hc){
+    setTimeout(()=>{ hc.classList.remove('pop'); void hc.offsetWidth; hc.classList.add('pop'); }, 1000);
+  }
+  // breathing after 1400 while speaking (we keep alive)
+  setTimeout(()=>{ wrap.classList.add('breathing'); // check low-end: if avg>24 drop blur+ripple
+    const st=getFrameStats(); if(st.avg>24){ // drop blur/ripple
+      try{ if(svg){ const p=svg.querySelector('path'); if(p) p.style.filter='none'; } const dim=document.getElementById('dimCanvas'); if(dim) dim.style.filter='none'; if(ripple) ripple.style.display='none'; }catch(e){}
+    }
+  }, 1400);
+}
+function stopCameraTracks(){
+  try{ if(currentStream){ currentStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} }); } }catch(e){}
+  // keep currentStream ref but tracks ended (spec requires readyState ended while Thinking/Speaking)
+  try{ if(window.__liveStopHook) window.__liveStopHook(); }catch(e){}
+  // also stop live audio input if present
+  try{ if(window.__liveAudioStop) window.__liveAudioStop(); }catch(e){}
+}
+function updateHeroForAnswer(isAnswer){
+  const hero=document.getElementById('heroLiveBtn'); if(!hero) return;
+  const label=hero.querySelector('.live-label'); if(!label) return;
+  if(isAnswer){ hero.classList.add('is-ask-another'); label.textContent='Ask another'; hero.style.background='linear-gradient(135deg,#0866FF,#2e7dfe)'; hero.setAttribute('aria-label','Ask another'); }
+  else { hero.classList.remove('is-ask-another'); label.textContent='Live'; hero.style.background=''; hero.setAttribute('aria-label','Start live mode'); }
+}
+
 function updateCameraButtons(activeFacing){
   if(camBackBtn) camBackBtn.classList.toggle('active', activeFacing==='environment');
   if(camFrontBtn) camFrontBtn.classList.toggle('active', activeFacing==='user');
@@ -505,7 +637,7 @@ function updateAskEnabled(){
 }
 function showLoading(text){ if(loadingEl){ loadingEl.hidden=false; if(loadingTextEl) loadingTextEl.textContent=text; } try{ if(typeof loadingB!=='undefined' && loadingB){ loadingB.hidden=false; const lt=loadingB.querySelector('.loading-text'); if(lt) lt.textContent=text; } }catch(e){} }
 function hideLoading(){ if(loadingEl) loadingEl.hidden=true; try{ if(typeof loadingB!=='undefined' && loadingB) loadingB.hidden=true; }catch(e){} }
-function clearOverlay(){ try{ ctx.clearRect(0,0,canvas.width,canvas.height); }catch(e){} try{ if(typeof ctxB!=='undefined' && ctxB) ctxB.clearRect(0,0,canvasB.width,canvasB.height); }catch(e){} try{ if(typeof bHighlightChipLayer!=='undefined' && bHighlightChipLayer){ bHighlightChipLayer.innerHTML=''; bHighlightChipLayer.hidden=true; } }catch(e){} try{ const hc=document.getElementById('highlightChip'); if(hc) hc.hidden=true; }catch(e){} }
+function clearOverlay(){ try{ ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.restore(); }catch(e){} try{ if(typeof ctxB!=='undefined' && ctxB){ ctxB.save(); ctxB.setTransform(1,0,0,1,0,0); ctxB.clearRect(0,0,canvasB.width,canvasB.height); ctxB.restore(); } }catch(e){} try{ if(typeof bHighlightChipLayer!=='undefined' && bHighlightChipLayer){ bHighlightChipLayer.innerHTML=''; bHighlightChipLayer.hidden=true; } }catch(e){} try{ const hc=document.getElementById('highlightChip'); if(hc) hc.hidden=true; }catch(e){} }
 function clearAnswer(){ if(answerEl){ answerEl.innerHTML=''; answerEl.hidden=true; } try{ if(typeof bAnswerSheet!=='undefined' && bAnswerSheet){ bAnswerSheet.hidden=true; bAnswerSheet.classList.remove('is-expanded','is-collapsed'); } if(typeof bAnswerText!=='undefined' && bAnswerText) bAnswerText.textContent=''; if(typeof bAnswerMeta!=='undefined' && bAnswerMeta) bAnswerMeta.textContent=''; if(typeof bAnswerSources!=='undefined' && bAnswerSources) bAnswerSources.innerHTML=''; if(typeof bAnswerChips!=='undefined' && bAnswerChips) bAnswerChips.innerHTML=''; if(typeof bSubtitles!=='undefined' && bSubtitles) bSubtitles.hidden=true; if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble) bTranscriptBubble.hidden=true; }catch(e){}
   // clear A thread answer bubbles but keep transcript
   try{ const thread=document.getElementById('designAThread'); if(thread){ thread.querySelectorAll('.bub.ai').forEach(el=>el.remove()); } const hc=document.getElementById('highlightChip'); if(hc) hc.hidden=true; }catch(e){} }
@@ -722,47 +854,56 @@ function freezeFrame(dataUrl, width, height){
     src: 'camera'
   };
   pendingFrameId = currentFrame.frameId;
-  if(preview){ preview.src = dataUrl; preview.hidden = false; }
+  const wrap=document.getElementById('cameraWrap');
+  // transition 350ms cross-fade video->photo with scale 1.00->1.03 and flash
+  if(preview){ preview.src = dataUrl; preview.hidden = false; preview.style.opacity='0'; preview.style.transform='scale(1.00)'; preview.style.transition='opacity 350ms ease, transform 350ms ease'; requestAnimationFrame(()=>{ preview.style.opacity='1'; preview.style.transform='scale(1.02)'; setTimeout(()=>{ try{ preview.style.transform='scale(1)'; }catch(e){} }, 350); }); }
   try{ if(typeof previewB!=='undefined' && previewB){ previewB.src = dataUrl; previewB.hidden = false; } }catch(e){}
-  if(video) video.hidden = true;
-  try{ if(typeof videoB!=='undefined' && videoB) videoB.hidden = true; }catch(e){}
+  if(video){ // keep hidden after fade but allow CSS cross-fade; we hide after 350ms
+    video.style.transition='opacity 350ms ease'; video.style.opacity='0'; setTimeout(()=>{ video.hidden=true; video.style.opacity=''; video.style.transition=''; }, 360);
+  }
+  try{ if(typeof videoB!=='undefined' && videoB){ videoB.style.transition='opacity 350ms ease'; videoB.style.opacity='0'; setTimeout(()=>{ videoB.hidden=true; videoB.style.opacity=''; }, 360); } }catch(e){}
   isFrozen = true;
+  // stop camera tracks/mic per spec — light off while thinking/speaking
+  try{ stopCameraTracks(); }catch(e){}
+  try{ if(wrap){ wrap.classList.add('is-frozen'); wrap.classList.remove('breathing','comet','bloom'); } }catch(e){}
   requestAnimationFrame(syncOverlaySize);
-  // for A: clear highlight chip until drawRegions populates
   try{ if(typeof bHighlightChipLayer!=='undefined' && bHighlightChipLayer) bHighlightChipLayer.hidden=true; }catch(e){}
   try{ const hc=document.getElementById('highlightChip'); if(hc) hc.hidden=true; }catch(e){}
+  // dim prepared in drawRegions; also clear previous cinematic
+  try{ clearDim(); }catch(e){}
+  setAppState('thinking');
 }
 
 function resetToLive(){
   updateAskEnabled();
-  if(!isFrozen) {
-    // still check if we need to clear answer on edit? Only if was frozen
-    // but spec says after answer, editing goes back to live preview, so we should reset if we have lastRegions shown
-  }
-  if(isFrozen || (lastRegions.length>0) || (answerEl && !answerEl.hidden) || (bAnswerSheet && !bAnswerSheet.hidden)){
+  const needsReset = isFrozen || (lastRegions.length>0) || (answerEl && !answerEl.hidden) || (bAnswerSheet && !bAnswerSheet.hidden);
+  if(!isFrozen && !needsReset) { if(questionHint) questionHint.hidden=true; return; }
+  if(needsReset){
+    const wasFrozen=isFrozen;
     isFrozen=false;
-    if(preview) { preview.hidden=true; }
-    if(previewB) { previewB.hidden=true; }
-    if(video && currentStream) video.hidden=false;
-    if(videoB && currentStream) videoB.hidden=false;
+    // exit animation 200ms drawing fade out while photo cross-fades to live
+    const wrap=document.getElementById('cameraWrap'); const dim=document.getElementById('dimCanvas'); const svg=document.getElementById('highlightSVG');
+    try{ if(dim && !dim.hidden){ dim.style.transition='opacity 200ms ease'; dim.style.opacity='0'; setTimeout(()=>{ clearDim(); }, 220); } }catch(e){}
+    try{ if(svg && !svg.hidden){ svg.style.transition='opacity 200ms ease'; svg.style.opacity='0'; setTimeout(()=>{ svg.hidden=true; svg.style.opacity=''; svg.style.transition=''; }, 210); } }catch(e){}
+    try{ if(wrap){ wrap.classList.remove('is-drawing','comet','bloom','breathing','is-frozen','has-highlight'); } }catch(e){}
+    try{ const hc=document.getElementById('highlightChip'); if(hc){ hc.style.transition='opacity 200ms ease'; hc.style.opacity='0'; setTimeout(()=>{ hc.hidden=true; hc.style.opacity=''; hc.style.transition=''; hc.classList.remove('pop'); }, 210); } }catch(e){}
+    // photo -> live cross-fade 200ms
+    if(wasFrozen && preview && !preview.hidden){
+      preview.style.transition='opacity 200ms ease, transform 200ms ease'; preview.style.opacity='1'; requestAnimationFrame(()=>{ preview.style.opacity='0'; preview.style.transform='scale(1.03)'; setTimeout(()=>{ preview.hidden=true; preview.style.opacity=''; preview.style.transform=''; preview.style.transition=''; }, 220); });
+    } else { if(preview) { preview.hidden=true; preview.style.opacity=''; } if(previewB) previewB.hidden=true; }
+    if(video){ video.hidden=false; video.style.opacity='0'; video.style.transition='opacity 200ms ease'; requestAnimationFrame(()=>{ video.style.opacity='1'; setTimeout(()=>{ video.style.opacity=''; video.style.transition=''; }, 220); }); }
+    if(videoB) videoB.hidden=false;
     clearOverlay();
     clearAnswer();
-    // also clear B sheet
     try{ if(bAnswerSheet) bAnswerSheet.hidden=true; if(bHighlightChipLayer){ bHighlightChipLayer.innerHTML=''; bHighlightChipLayer.hidden=true; } if(bTranscriptBubble) bTranscriptBubble.hidden=true; if(bSubtitles) bSubtitles.hidden=true; }catch(e){}
     if(retryBtn) retryBtn.hidden=true;
     if(questionHint) questionHint.hidden=true;
-    lastRegions=[];
-    lastFrame=null;
-    // keep currentFrame? No, clear so next Ask captures fresh
-    currentFrame=null;
-    pendingFrameId=null;
-    pendingRequestId=null;
-    syncOverlaySize();
-    updateAskEnabled();
-  } else {
-    // if not frozen but user edits, just hide hint/retry
-    if(questionHint) questionHint.hidden=true;
-  }
+    lastRegions=[]; lastFrame=null; currentFrame=null; pendingFrameId=null; pendingRequestId=null;
+    // restart camera/mic fresh getUserMedia (permission already granted)
+    try{ if(!currentStream || currentStream.getTracks().every(t=>t.readyState==='ended')){ startCamera(currentFacing); } }catch(e){}
+    try{ updateHeroForAnswer(false); }catch(e){}
+    syncOverlaySize(); updateAskEnabled(); setAppState('listening');
+  } else { if(questionHint) questionHint.hidden=true; }
 }
 
 // file fallback handling
@@ -810,60 +951,118 @@ function captureFromFile(file){
 
 function clearBOverlay(){ try{ if(ctxB) ctxB.clearRect(0,0,canvasB.width,canvasB.height); }catch(e){} }
 function drawToCanvas(targetCtx, targetCanvas, regions, frame){
-  const w=targetCanvas.width, h=targetCanvas.height;
-  if(!w||!h) return;
+  // targetCanvas already sized to CSS box * dpr with transform dpr scaled; draw in CSS pixels
+  const cssW = targetCanvas._cssW || targetCanvas.clientWidth || targetCanvas.width;
+  const cssH = targetCanvas._cssH || targetCanvas.clientHeight || targetCanvas.height;
+  const imgW = (frame && frame.width) ? frame.width : cssW;
+  const imgH = (frame && frame.height) ? frame.height : cssH;
+  if(!cssW||!cssH||!imgW||!imgH) return;
+  // clear with reset transform handling: clear in device pixels
+  try{ const dpr=targetCanvas._dpr||1; targetCtx.save(); targetCtx.setTransform(1,0,0,1,0,0); targetCtx.clearRect(0,0,targetCanvas.width,targetCanvas.height); targetCtx.restore(); }catch(e){ try{ targetCtx.clearRect(0,0,cssW,cssH);}catch(_e){} }
   const toDraw=[]; regions.forEach(r=>{ if(r.status==='observed' && r.source==='sam3') toDraw.push(r); else if(r.status==='fallback_box') toDraw.push(r); });
-  const lineWidthOuter=Math.max(3, w*0.003); const lineWidthHalo=Math.max(1, w*0.0015);
   toDraw.forEach(r=>{
     const poly=r.polygon; if(!Array.isArray(poly)||poly.length<3) return;
-    targetCtx.beginPath(); poly.forEach((pt,i)=>{ const x=Math.max(0, Math.min(w, pt[0]*w)); const y=Math.max(0, Math.min(h, pt[1]*h)); if(i===0) targetCtx.moveTo(x,y); else targetCtx.lineTo(x,y); }); targetCtx.closePath();
+    // map each normalized point through cover transform
+    const mapped = poly.map(pt=> coverMap(pt[0], pt[1], cssW, cssH, imgW, imgH));
+    targetCtx.beginPath();
+    mapped.forEach((m,i)=>{ if(i===0) targetCtx.moveTo(m.x,m.y); else targetCtx.lineTo(m.x,m.y); });
+    targetCtx.closePath();
     const isFallback = r.status==='fallback_box';
-    const isB = targetCanvas===canvasB;
     if(!isFallback){
-      // blue fill 28% + white outline + blue glow matches preview .hl path
       targetCtx.save();
-      targetCtx.shadowColor='rgba(8,102,255,0.9)'; targetCtx.shadowBlur=Math.max(6, w*0.008);
-      targetCtx.fillStyle='rgba(8,102,255,0.28)'; targetCtx.fill();
+      targetCtx.shadowColor='rgba(8,102,255,0.9)'; targetCtx.shadowBlur=6;
+      targetCtx.fillStyle='rgba(8,102,255,0.28)';
+      targetCtx.fill();
       targetCtx.shadowBlur=0;
       targetCtx.restore();
     } else {
       targetCtx.fillStyle='rgba(255,98,0,0.22)'; targetCtx.fill();
     }
-    targetCtx.save(); if(isFallback) targetCtx.setLineDash([10,8]);
-    targetCtx.lineWidth=lineWidthHalo+lineWidthOuter; targetCtx.strokeStyle='rgba(255,255,255,0.95)'; targetCtx.stroke();
-    targetCtx.lineWidth=Math.max(3, w*0.003); targetCtx.strokeStyle = isFallback ? '#ff6200' : '#fff'; if(!isFallback){ targetCtx.shadowColor='rgba(8,102,255,0.9)'; targetCtx.shadowBlur=6; } targetCtx.stroke(); targetCtx.shadowBlur=0; targetCtx.restore();
-    void 0;
+    // outline: 3px white + blue glow
+    targetCtx.save();
+    if(isFallback) targetCtx.setLineDash([10,8]);
+    // halo
+    targetCtx.lineWidth=5; targetCtx.strokeStyle='rgba(255,255,255,0.95)'; targetCtx.stroke();
+    targetCtx.lineWidth=3; targetCtx.strokeStyle = isFallback ? '#ff6200' : '#fff';
+    if(!isFallback){ targetCtx.shadowColor='rgba(8,102,255,0.9)'; targetCtx.shadowBlur=6; }
+    // animated dash for draw-in: set dash offset via lineDashOffset if available
+    try{ if(!isFallback && targetCtx.lineDashOffset!==undefined){ targetCtx.setLineDash([1000]); targetCtx.lineDashOffset=1000; } }catch(e){}
+    targetCtx.stroke(); targetCtx.shadowBlur=0; targetCtx.restore();
   });
   if(demoMode && demoMode.checked){ targetCtx.fillStyle='rgba(255,255,255,0.9)'; targetCtx.font='bold 16px sans-serif'; targetCtx.fillText('DEMO', 12, 24); }
   targetCanvas.dataset.drawn=Date.now();
 }
 function drawRegions(regions, frame){
   clearOverlay(); try{ if(typeof clearBOverlay==='function') clearBOverlay(); }catch(e){}
-  // draw to main canvas
+  // draw to main canvas using cover-mapped coordinates
   if(canvas && canvas.width && canvas.height) drawToCanvas(ctx, canvas, regions, frame);
   // draw to B canvas with glow if present
   try{ if(typeof canvasB!=='undefined' && canvasB && typeof ctxB!=='undefined' && ctxB && canvasB.width && canvasB.height) drawToCanvas(ctxB, canvasB, regions, frame); }catch(e){}
-  // A highlight: SVG outline + pill tag on frozen frame (matches preview .hl)
+  // A highlight: SVG outline + pill tag on frozen frame (cover-mapped)
   try{
     const hc=document.getElementById('highlightChip');
     const svg=document.getElementById('highlightSVG');
-    const svgPath=svg ? svg.querySelector('path') : null;
     const wrap=document.getElementById('cameraWrap');
-    if(hc && svg && svgPath){
+    if(hc && svg){
       const toShow=(regions||[]).filter(r=> (r.status==='observed' && r.source==='sam3')||r.status==='fallback_box');
-      if(toShow.length){
+      if(toShow.length && frame && wrap){
         const r=toShow[0];
         const poly=r.polygon; if(poly && poly.length>=3){
-          const d='M'+poly.map(p=> (p[0]*100).toFixed(2)+' '+(p[1]*100).toFixed(2)).join(' L')+' Z';
-          const clone=svg.cloneNode(true); clone.querySelector('path').setAttribute('d', d); svg.replaceWith(clone); // retrigger animation
-          clone.hidden=false; clone.classList.add('hl');
+          const rect=wrap.getBoundingClientRect(); const cssW=rect.width, cssH=rect.height;
+          const imgW=frame.width||cssW, imgH=frame.height||cssH;
+          const mapped=poly.map(p=> coverMap(p[0], p[1], cssW, cssH, imgW, imgH));
+          // set SVG viewBox to css pixels and build path
+          svg.setAttribute('viewBox', '0 0 '+cssW+' '+cssH);
+          svg.setAttribute('preserveAspectRatio','none');
+          svg.style.width=cssW+'px'; svg.style.height=cssH+'px';
+          const d='M'+mapped.map(m=> m.x.toFixed(2)+' '+m.y.toFixed(2)).join(' L')+' Z';
+          let pEl=svg.querySelector('path'); if(!pEl){ pEl=document.createElementNS('http://www.w3.org/2000/svg','path'); svg.appendChild(pEl); }
+          pEl.setAttribute('d', d);
+          // retrigger draw animation
+          const clone=svg.cloneNode(true); svg.replaceWith(clone); clone.hidden=false; clone.classList.add('hl');
+          // gentle pulse once via CSS animation (reuse .hl)
         }
+        // label chip at polygon top-centre clamped inside card
+        const rect=wrap.getBoundingClientRect(); const cssW2=rect.width, cssH2=rect.height;
+        const imgW2=frame.width||cssW2, imgH2=frame.height||cssH2;
+        const mapped2=r.polygon.map(p=> coverMap(p[0], p[1], cssW2, cssH2, imgW2, imgH2));
+        let minY=Infinity, minX=Infinity, maxX=-Infinity, sumX=0;
+        mapped2.forEach(m=>{ if(m.y<minY) minY=m.y; if(m.x<minX) minX=m.x; if(m.x>maxX) maxX=m.x; sumX+=m.x; });
+        const cx = sumX/mapped2.length;
+        const topY = minY;
         hc.textContent=r.label||r.part||'Highlighted';
-        // position chip at centroid top
-        let cx=0,cy=0; (r.polygon||[]).forEach(pt=>{cx+=pt[0]; cy+=pt[1]}); if(r.polygon && r.polygon.length){ cx/=r.polygon.length; cy/=r.polygon.length; hc.style.left=(cx*100)+'%'; hc.style.top=(cy*100)+'%'; }
+        // measure chip width for clamping: estimate 8px padding + text width
+        hc.hidden=false; // show to measure if needed, then clamp
+        // clamp inside card: x in [chipHalfW, cssW-chipHalfW], y in [8, cssH-8]
+        // we set style left/top in px now, not %
+        // use getBoundingClientRect after visible to adjust
+        hc.style.left = cx + 'px'; hc.style.top = topY + 'px';
+        // clamp after layout: run in next frame
+        requestAnimationFrame(()=>{
+          try{
+            const cw=hc.offsetWidth||80, ch=hc.offsetHeight||22;
+            let x=cx, y=topY;
+            x=Math.max(cw/2+4, Math.min(cssW2 - cw/2 -4, x));
+            y=Math.max(ch+6, Math.min(cssH2-4, y));
+            hc.style.left=x+'px'; hc.style.top=y+'px';
+          }catch(e){}
+        });
         hc.hidden=false;
         if(wrap){ wrap.classList.add('has-highlight'); wrap.classList.add('is-frozen'); }
-      } else { hc.hidden=true; svg.hidden=true; if(wrap){ wrap.classList.remove('has-highlight'); if(!isFrozen) wrap.classList.remove('is-frozen'); } }
+        // cinematic: focus dim + sweep + comet + bloom + ripple + label pop
+        try{ const toDrawCine=(regions||[]).filter(r=> (r.status==='observed' && r.source==='sam3')||r.status==='fallback_box'); if(toDrawCine.length){ drawDimMask(toDrawCine, frame); // draw dim outside polygons
+          // if multiple regions, stagger ripple 150ms each; for now trigger main cinematic for first, then stagger others
+          playCinematic([toDrawCine[0]], frame);
+          // stagger additional regions 150ms apart for ripple
+          for(let i=1;i<toDrawCine.length;i++){
+            ((idx)=>{
+              setTimeout(()=>{
+                try{ const rip=document.getElementById('ripple'); if(rip){ const pos=positionRipple([toDrawCine[idx]], frame); if(pos){ rip.hidden=false; rip.classList.remove('go'); void rip.offsetWidth; rip.classList.add('go'); setTimeout(()=>{ rip.hidden=true; rip.classList.remove('go'); }, 1000); } } }catch(e){}
+              }, i*150);
+            })(i);
+          }
+        } }catch(e){}
+      } else { hc.hidden=true; const s=document.getElementById('highlightSVG'); if(s) s.hidden=true; if(wrap){ wrap.classList.remove('has-highlight'); if(!isFrozen) wrap.classList.remove('is-frozen'); } try{ clearDim(); }catch(e){} }
     }
   }catch(e){}
   // B label chips overlay (legacy)
@@ -885,74 +1084,6 @@ function drawRegions(regions, frame){
       } else bHighlightChipLayer.hidden=true;
     }
   }catch(e){}
-  // return early; original w/h path handled above, keep for tests
-  return;
-  const w=canvas.width, h=canvas.height;
-  if(!w||!h) return;
-  const toDraw=[];
-  regions.forEach(r=>{
-    if(r.status==='observed' && r.source==='sam3') toDraw.push(r);
-    else if(r.status==='fallback_box') toDraw.push(r);
-  });
-  const lineWidthOuter=Math.max(3, w*0.003);
-  const lineWidthHalo=Math.max(1, w*0.0015);
-  toDraw.forEach(r=>{
-    const poly=r.polygon;
-    if(!Array.isArray(poly)||poly.length<3) return;
-    ctx.beginPath();
-    poly.forEach((pt,i)=>{
-      const x=Math.max(0, Math.min(w, pt[0]*w));
-      const y=Math.max(0, Math.min(h, pt[1]*h));
-      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    });
-    ctx.closePath();
-    const isFallback = r.status==='fallback_box';
-    if(!isFallback){
-      ctx.fillStyle='rgba(255,98,0,0.35)';
-      ctx.fill();
-    }
-    // dashed outline for fallback, solid for observed
-    ctx.save();
-    if(isFallback) ctx.setLineDash([10,8]);
-    ctx.lineWidth=lineWidthHalo+lineWidthOuter;
-    ctx.strokeStyle='rgba(255,255,255,0.6)';
-    ctx.stroke();
-    ctx.lineWidth=lineWidthOuter;
-    ctx.strokeStyle='#ff6200';
-    ctx.stroke();
-    ctx.restore();
-    let cx=0,cy=0;
-    poly.forEach(p=>{ cx+=p[0]; cy+=p[1]; });
-    cx=cx/poly.length*w;
-    cy=cy/poly.length*h;
-    const label=r.label||r.part||'region';
-    const pad=6;
-    ctx.font='14px sans-serif';
-    const metrics=ctx.measureText(label);
-    let lx=cx-metrics.width/2-pad;
-    let ly=cy-40;
-    lx=Math.max(pad, Math.min(w-metrics.width-pad*2-pad, lx));
-    ly=Math.max(pad, Math.min(h-28-pad, ly));
-    ctx.fillStyle='rgba(0,0,0,0.85)';
-    ctx.fillRect(lx-pad, ly-pad, metrics.width+pad*2, 20+pad*2);
-    ctx.strokeStyle='#ff6200';
-    ctx.lineWidth=2;
-    ctx.strokeRect(lx-pad, ly-pad, metrics.width+pad*2, 20+pad*2);
-    ctx.fillStyle='#fff';
-    ctx.fillText(label, lx, ly+14);
-    ctx.beginPath();
-    ctx.moveTo(cx,cy);
-    ctx.lineTo(lx+metrics.width/2, ly);
-    ctx.strokeStyle='#ff6200';
-    ctx.lineWidth=Math.max(2, w*0.002);
-    ctx.stroke();
-  });
-  if(demoMode && demoMode.checked){
-    ctx.fillStyle='rgba(255,255,255,0.9)';
-    ctx.font='bold 16px sans-serif';
-    ctx.fillText('DEMO', 12, 24);
-  }
-  canvas.dataset.drawn=Date.now();
 }
 
 function renderAnswerB(data){
@@ -1019,8 +1150,14 @@ function renderAnswer(data){
         ai.prepend(banner);
       }
       thread.appendChild(ai);
-      // error bubble with Try again chip - if error state will be handled separately
-      thread.scrollTop=thread.scrollHeight; setTimeout(()=>{ thread.scrollTop=thread.scrollHeight; }, 100);
+      // scroll newest bubble fully above bar
+      try{
+        const bar=document.getElementById('bottomPill');
+        const barH= bar ? bar.offsetHeight : 68;
+        thread.style.paddingBottom = (barH + 16) + 'px';
+        ai.scrollIntoView({block:'end', behavior:'smooth'});
+        setTimeout(()=>{ try{ ai.scrollIntoView({block:'end'}); }catch(e){ thread.scrollTop=thread.scrollHeight; } }, 120);
+      }catch(e){ thread.scrollTop=thread.scrollHeight; setTimeout(()=>{ thread.scrollTop=thread.scrollHeight; }, 100); }
     }
   }catch(e){}
   if(!answerEl) { setAppState('answer'); return; }
@@ -1173,6 +1310,11 @@ async function ask(){
       sendClientEvent('ask_failed', resp.status+' '+code+' '+ms);
       setStatus(msg);
       if(retryBtn) retryBtn.hidden=false;
+      // error: restore live camera after message per spec
+      setAppState('error', msg);
+      hideLoading(); clearInterval(stageInterval);
+      // brief keep frozen then restore so user can Try again
+      setTimeout(()=>{ try{ if(isFrozen){ preview.hidden=true; if(video && currentStream){ video.hidden=false; } isFrozen=false; clearDim(); try{ const s=document.getElementById('highlightSVG'); if(s){ s.hidden=true; } }catch(e){} const wrap=document.getElementById('cameraWrap'); if(wrap) wrap.classList.remove('is-frozen'); startCamera(currentFacing).catch(()=>{}); } setAppState('idle'); }catch(e){} }, 600);
       return;
     }
     const data=await resp.json();
@@ -1188,6 +1330,9 @@ async function ask(){
     sendClientEvent('ask_ok', ms);
     setStatus('Answer ready');
     if(retryBtn) retryBtn.hidden=true;
+    // answer moment: keep frozen photo+drawing, show Ask another, breathing pulse while speaking
+    setAppState('answer', (data.explanation||'').slice(0,40));
+    updateHeroForAnswer(true);
   }catch(e){
     if(e.name==='AbortError'){
       setStatus('Cancelled');
@@ -1275,9 +1420,10 @@ function showTranscript(text){ const clean=collapseDuplicateWords(text); // lega
   if(transcriptBubble){ transcriptBubble.textContent=clean; transcriptBubble.hidden=true; }
   try{ if(typeof bTranscriptBubble!=='undefined' && bTranscriptBubble){ bTranscriptBubble.textContent=clean; bTranscriptBubble.hidden=true; } }catch(e){}
   // also render into thread as right-aligned light-blue bubble
-  try{ const thread=document.getElementById('designAThread'); if(thread){ const empty=document.getElementById('emptyState'); if(empty) empty.hidden=true; let me=thread.querySelector('.bub.me'); if(!me){ me=document.createElement('div'); me.className='bub me'; thread.appendChild(me); } me.textContent=clean; me.hidden=false; // hide suggested chips after first question
+  try{ const thread=document.getElementById('designAThread'); if(thread){ const empty=document.getElementById('emptyState'); if(empty) empty.hidden=true; let me=thread.querySelector('.bub.me'); if(!me){ me=document.createElement('div'); me.className='bub me'; thread.appendChild(me); } me.textContent=clean; me.hidden=false;
     const chips=document.getElementById('suggestedChips'); if(chips) chips.hidden=true;
-    thread.scrollTop=thread.scrollHeight; setTimeout(()=>{ thread.scrollTop=thread.scrollHeight; }, 100); }
+    try{ me.scrollIntoView({block:'end', behavior:'smooth'}); setTimeout(()=>{ try{ me.scrollIntoView({block:'end'});}catch(e){ thread.scrollTop=thread.scrollHeight; } },120);}catch(e){ thread.scrollTop=thread.scrollHeight; setTimeout(()=>{ thread.scrollTop=thread.scrollHeight; },100); }
+  }
   }catch(e){} }
 function showSubtitles(text){ const clean=collapseDuplicateWords(text); // legacy subtitles hidden – not shown inside camera card
   if(subtitlesEl){ subtitlesEl.textContent=clean; subtitlesEl.hidden=true; } try{ if(typeof bSubtitles!=='undefined' && bSubtitles){ bSubtitles.textContent=clean; bSubtitles.hidden=true; } }catch(e){}
@@ -1838,11 +1984,17 @@ function initHeroLive(){
   const hero2=document.getElementById('liveToggle'); // legacy
   if(!hero) return;
   hero.addEventListener('click', async ()=>{
+    if(appState==='answer'){
+      resetToLive();
+      try{ await startCamera(currentFacing); }catch(e){}
+      return;
+    }
     if(!liveEnabled) await startLive(); else stopLive();
   });
-  // sync hero label with live state via AppState listener
+  // sync hero label with live state via AppState listener (answer handled in setAppState)
   onAppState(({state})=>{
     if(!hero) return;
+    if(state==='answer') return; // handled in setAppState as Ask another
     if(liveEnabled && (state==='listening'||state==='hearing'||state==='thinking'||state==='speaking')){
       hero.textContent='Stop';
       hero.classList.add('is-active');
