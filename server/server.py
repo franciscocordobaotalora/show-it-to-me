@@ -71,18 +71,18 @@ def analyze(data, glimmer_mod, sam_mod):
         data_url = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
     except Exception:
         return 400, {'error':'corrupt_image'}
-    # reference text
-    from reference import get_reference_text, get_part_side, get_part_label, get_part_visual, get_part_sam_prompts
+    # reference text - OPTIONAL Pi 5 boost only if is_pi_board true
+    from reference import get_reference_text, get_part_side, get_part_label, get_part_visual, get_part_sam_prompts, KNOWN_PI_PARTS
     ref_text = get_reference_text()
-    ref_text = f"Image size: {img.width} x {img.height} pixels\n{ref_text}"
+    ref_text = f"Image size: {img.width} x {img.height} pixels\nOPTIONAL Pi 5 reference (only use if photo shows Raspberry Pi 5 board, otherwise ignore):\n{ref_text}"
     timings = {}
     timings['decode_ms'] = int((time.time() - t_decode_start)*1000)
     t0 = time.time()
-    # glimmer pass1
+    # glimmer pass1 - open vocabulary
     try:
         p1 = glimmer_mod.pass1(data_url, question, ref_text)
         timings['pass1_ms'] = int((time.time()-t0)*1000)
-        eventlog.log_event('glimmer_pass1', requestId=requestId, frameId=frameId, ms=timings['pass1_ms'], finish_reason=p1.get('finish_reason'), tokens=p1.get('tokens'), needs_view=p1.get('needs_view'))
+        eventlog.log_event('glimmer_pass1', requestId=requestId, frameId=frameId, ms=timings['pass1_ms'], finish_reason=p1.get('finish_reason'), tokens=p1.get('tokens'), needs_view=p1.get('needs_view'), is_pi_board=p1.get('is_pi_board'))
     except GlimmerError as e:
         import traceback
         eventlog.log_event('glimmer_pass1', requestId=requestId, frameId=frameId, level='error', error=e.code, error_msg=str(e), traceback=traceback.format_exc()[:2000])
@@ -95,19 +95,55 @@ def analyze(data, glimmer_mod, sam_mod):
         import traceback
         eventlog.log_event('glimmer_pass1', requestId=requestId, frameId=frameId, level='error', error='exception', error_msg=str(e), traceback=traceback.format_exc()[:2000])
         return 502, {'error':'glimmer_unreachable'}
-    # enforce reference rules and needs_view validation
+    # open vocabulary: no allowed-parts list, answer 2-3 sentences in user's language, is_pi_board flag
+    is_pi_board = p1.get('is_pi_board')
+    targets = p1.get('targets',[])
+    # normalize targets to support both legacy 'part' and new 'label' shapes
+    for _t in targets:
+        if 'label' not in _t or not _t.get('label'):
+            part = _t.get('part')
+            if part:
+                try:
+                    _t['label'] = get_part_label(part)
+                except Exception:
+                    _t['label'] = part
+            else:
+                _t['label'] = _t.get('label') or 'item'
+        if 'sam_prompt' not in _t or not _t.get('sam_prompt'):
+            _t['sam_prompt'] = _t.get('label', 'item')
+        if 'id' not in _t or not _t.get('id'):
+            _t['id'] = str(targets.index(_t))
+        # ensure box_1000 present for valid targets
+        if _t.get('box_1000') is not None:
+            b = _t['box_1000']
+            # validate box is 4 numbers in 0..1000
+            if not (isinstance(b, list) and len(b)==4 and all(isinstance(v,(int,float)) for v in b)):
+                _t['box_1000'] = None
+            else:
+                # clamp 0..1000 and ensure x2>x1 y2>y1
+                _t['box_1000'] = [max(0,min(1000,float(v))) for v in b]
+                if not (_t['box_1000'][2] > _t['box_1000'][0] and _t['box_1000'][3] > _t['box_1000'][1]):
+                    _t['box_1000'] = None
+    # infer legacy Pi for backward compat with tests that omit is_pi_board
+    if is_pi_board is None:
+        has_pi_part = any(t.get('part') in KNOWN_PI_PARTS for t in targets)
+        # also infer from old label naming if needed
+        is_pi_board = bool(has_pi_part) if targets else False
+    # enforce needs_view only for Pi board case
     needs_view = p1.get('needs_view')
     if needs_view not in (None, 'flip_board', 'closer'):
         needs_view = None
-    targets = p1.get('targets',[])
-    q_lower = question.lower()
-    microsd_mentioned = any(k in q_lower for k in ['microsd','micro sd','sd card','memory card','storage card'])
-    has_microsd_target = any(t.get('part') == 'microsd_slot' for t in targets)
-    if (microsd_mentioned or has_microsd_target) and get_part_side('microsd_slot') == 'underside':
-        view = p1.get('view')
-        if view == 'top' or view is None:
-            needs_view = 'flip_board'
-            targets = [x for x in targets if x.get('part') != 'microsd_slot']
+    if is_pi_board:
+        q_lower = question.lower()
+        microsd_mentioned = any(k in q_lower for k in ['microsd','micro sd','sd card','memory card','storage card'])
+        has_microsd_target = any(t.get('part') == 'microsd_slot' or 'microsd' in (t.get('label','') or '').lower() or 'microsd' in (t.get('sam_prompt','') or '').lower() for t in targets)
+        if (microsd_mentioned or has_microsd_target) and get_part_side('microsd_slot') == 'underside':
+            view = p1.get('view')
+            if view == 'top' or view is None:
+                needs_view = 'flip_board'
+                targets = [x for x in targets if x.get('part') != 'microsd_slot' and 'microsd' not in (x.get('label','') or '').lower()]
+    else:
+        needs_view = None
     # real refinement
     def box_iou(a,b):
         x1 = max(a[0],b[0]); y1 = max(a[1],b[1]); x2 = min(a[2],b[2]); y2 = min(a[3],b[3])
@@ -206,20 +242,43 @@ def analyze(data, glimmer_mod, sam_mod):
                     eventlog.log_event('sam_candidates', requestId=requestId, frameId=frameId, level='error', part=t.get('part'), error=str(e), traceback=tb)
                     break
                 part = t.get('part')
-                label = get_part_label(part) if part else part
+                label = t.get('label') or (get_part_label(part) if part else 'item')
                 if result is None:
-                    regions.append({
-                    'id': t.get('id'),
-                    'part': part,
-                    'label': label,
-                    'polygon': None,
-                    'bbox': None,
-                    'score': 0.0,
-                    'status': 'not_found',
-                    'source': 'sam3',
-                    'refined': t.get('refined', False),
-                    'selection': 'none'
-                })
+                    # generic quality gate: if SAM found nothing, fallback to Glimmer box as dashed outline
+                    box_fallback = t.get('box_1000')
+                    if box_fallback and len(box_fallback)==4:
+                        bbox_fb = [box_fallback[0]/1000.0, box_fallback[1]/1000.0, box_fallback[2]/1000.0, box_fallback[3]/1000.0]
+                        poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
+                        eventlog.log_event('fallback_box', requestId=requestId, frameId=frameId, label=label, box_1000=box_fallback)
+                        regions.append({
+                            'id': t.get('id'),
+                            'part': part,
+                            'label': label,
+                            'polygon': poly_fb,
+                            'bbox': bbox_fb,
+                            'score': 0.0,
+                            'status': 'fallback_box',
+                            'source': 'glimmer_box',
+                            'refined': t.get('refined', False),
+                            'selection': 'fallback_box'
+                        })
+                    else:
+                        regions.append({
+                            'id': t.get('id'),
+                            'part': part,
+                            'label': label,
+                            'polygon': None,
+                            'bbox': None,
+                            'score': 0.0,
+                            'status': 'not_found',
+                            'source': 'sam3',
+                            'refined': t.get('refined', False),
+                            'selection': 'none'
+                        })
+                    # still log selection for fallback path as none found
+                    eventlog.log_event('selection', requestId=requestId, frameId=frameId, part=part or label, selection_mode='none', box_iou=None)
+                    eventlog.log_event('quality_gate', requestId=requestId, frameId=frameId, part=part or label, kept=False, reason='fallback_box')
+                    continue
                 else:
                     # quality gate
                     bbox = result.get('bbox')
@@ -242,10 +301,10 @@ def analyze(data, glimmer_mod, sam_mod):
                             sel_iou = None
                     eventlog.log_event('selection', requestId=requestId, frameId=frameId, part=part, selection_mode=selection, box_iou=round(sel_iou,3) if sel_iou is not None else None)
                     reject = False
-                    # bbox area >60% unless board overlap/marks
+                    # generic quality gate: reject masks covering >85% frame
                     if bbox:
                         area = max(0.0, bbox[2]-bbox[0]) * max(0.0, bbox[3]-bbox[1])
-                        if area > 0.6 and not (part == 'board' and selection in ('overlap','marks')):
+                        if area > 0.85:
                             reject = True
                     # polygon points <3
                     if polygon and len(polygon) < 3:
@@ -265,22 +324,41 @@ def analyze(data, glimmer_mod, sam_mod):
                         iou_val = inter/union if union>0 else 0.0
                         if iou_val < 0.2:
                             reject = True
-                    eventlog.log_event('quality_gate', requestId=requestId, frameId=frameId, part=part, kept=not reject, reason='iou' if iou_val<0.2 else ('area' if bbox and max(0.0,bbox[2]-bbox[0])*max(0.0,bbox[3]-bbox[1])>0.6 else 'polygon' if polygon and len(polygon)<3 else 'ok'))
+                    eventlog.log_event('quality_gate', requestId=requestId, frameId=frameId, part=part or label, kept=not reject, reason='iou' if iou_val<0.2 else ('area' if bbox and max(0.0,bbox[2]-bbox[0])*max(0.0,bbox[3]-bbox[1])>0.85 else 'polygon' if polygon and len(polygon)<3 else 'ok'))
                     if reject:
                         result = None
                     if result is None:
-                        regions.append({
-                        'id': t.get('id'),
-                        'part': part,
-                        'label': label,
-                        'polygon': None,
-                        'bbox': None,
-                        'score': 0.0,
-                        'status': 'not_found',
-                        'source': 'sam3',
-                        'refined': t.get('refined', False),
-                        'selection': 'none'
-                    })
+                        # fallback to Glimmer box if quality gate rejected
+                        box_fallback = t.get('box_1000')
+                        if box_fallback and len(box_fallback)==4:
+                            bbox_fb = [box_fallback[0]/1000.0, box_fallback[1]/1000.0, box_fallback[2]/1000.0, box_fallback[3]/1000.0]
+                            poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
+                            eventlog.log_event('fallback_box', requestId=requestId, frameId=frameId, label=label, box_1000=box_fallback, reason='quality_gate_reject')
+                            regions.append({
+                                'id': t.get('id'),
+                                'part': part,
+                                'label': label,
+                                'polygon': poly_fb,
+                                'bbox': bbox_fb,
+                                'score': 0.0,
+                                'status': 'fallback_box',
+                                'source': 'glimmer_box',
+                                'refined': t.get('refined', False),
+                                'selection': 'fallback_box'
+                            })
+                        else:
+                            regions.append({
+                                'id': t.get('id'),
+                                'part': part,
+                                'label': label,
+                                'polygon': None,
+                                'bbox': None,
+                                'score': 0.0,
+                                'status': 'not_found',
+                                'source': 'sam3',
+                                'refined': t.get('refined', False),
+                                'selection': 'none'
+                            })
                     else:
                         regions.append({
                         'id': t.get('id'),
@@ -306,7 +384,7 @@ def analyze(data, glimmer_mod, sam_mod):
     # rule 1a: when needs_view is set, drop regions for parts needing view and board outline
     if needs_view:
         regions = [r for r in regions if r.get('part') not in ('microsd_slot','board')]
-    # answer from pass1, no separate pass2 unless missing
+    # answer from pass1 (open vocabulary 2-3 sentences in user's language), never empty
     answer = p1.get('answer')
     if not answer:
         # fallback to pass2 for backward compatibility / tests
@@ -318,12 +396,19 @@ def analyze(data, glimmer_mod, sam_mod):
             explanation = re.sub(r'\s+', ' ', explanation).strip()
             answer = explanation
         except Exception:
-            labels = [r.get('label') for r in regions if r.get('status')=='observed']
+            labels = [r.get('label') for r in regions if r.get('status') in ('observed','fallback_box')]
             if labels:
                 answer = 'Found ' + ', '.join(labels) + '.'
             else:
-                answer = 'No parts identified.'
+                answer = 'Here is the highlighted area as requested.'
     explanation = answer
+    # never show empty answer
+    if not explanation or not str(explanation).strip():
+        labels = [r.get('label') for r in regions if r.get('status') in ('observed','fallback_box')]
+        if labels:
+            explanation = 'Found ' + ', '.join(labels) + '.'
+        else:
+            explanation = 'Here is the highlighted area as requested.'
     timings['total_ms'] = int((time.time() - t_decode_start)*1000)
     timings['pass2_ms'] = 0
     steps = [

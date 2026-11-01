@@ -6,11 +6,13 @@ Written by Muse Spark Open (Baseten seat) and several other AI coding agents.
 
 ## What it is
 
-Show It To Me is a phone camera guide for a Raspberry Pi 5. You take a photo of the board and ask a question. The app highlights the relevant part on your photo and gives a short answer.
+Show It To Me is a phone camera guide for anything you point at. You take a photo of any object and ask a question. The app highlights the relevant thing(s) on your photo and gives a short answer.
 
-Supported parts: fan header (the 4 pin FAN socket), USB-C power port, micro-HDMI x2 (two ports), microSD slot, and cooler fan.
+Point your camera at anything and ask. Example: photo of a mug plus "What is this?" returns a polygon on the mug and a two to three sentence explanation. The answer is in the language of the question.
 
-Example: photo plus "Where does the power go?" returns a polygon on the USB-C port and a one or two sentence answer.
+Optional knowledge boost: when the photo shows a Raspberry Pi 5 board (detected via `is_pi_board`), the Pi 5 reference pack is used for precise part labels (fan header, USB-C power, micro-HDMI x2, microSD slot, cooler fan). Otherwise the generic open-vocabulary path is used.
+
+Stack: phone web app, Python HTTP API on Atlas, Muse for vision and language, SAM 3 for masks.
 
 Stack: phone web app, Python HTTP API on Atlas, Muse for vision and language, SAM 3 for masks.
 
@@ -24,16 +26,16 @@ Both Muse models are Meta open weight models.
 
 ## Pipeline
 
-Six steps for each request:
+Six steps for each request (open vocabulary):
 
-1. Pass 1 with Muse: view (top, underside, unknown), targets (part, sam_prompt, box in 0..1000), answer (up to two sentences), and needs_view if the board must be flipped or moved closer.
-2. SAM text candidates: query SAM with prompts like "port" or "white connector" for each target.
+1. Pass 1 with Muse: answers the user's question about whatever is in the photo (2 to 3 sentences in user's language) and returns targets for the thing(s) the answer is about: {id, label (2 to 4 words), sam_prompt (short noun phrase for SAM), box_1000 in 0..1000}. Also returns is_pi_board boolean and needs_view only for Pi board when the microSD slot is needed but not visible.
+2. SAM text candidates: query SAM with label/sam_prompt for each target; Pi board case uses reference pack prompts.
 3. Choose by box overlap. If no match, ask Muse to pick a numbered candidate. If still no match, use a box prompt.
-4. Quality gate: drop low quality masks.
-5. Build polygons for the overlay.
-6. Optional second Muse call only if the answer is missing. Otherwise reuse the first answer.
+4. Generic quality gate: reject masks covering >85% of frame, fewer than 3 polygon points, or box-prompt mask with bbox IoU <0.2 against requested box. If SAM finds nothing, draw Muse's own box as dashed outline and log event fallback_box.
+5. Build polygons for the overlay (dashed for fallback_box).
+6. Optional second Muse call only if the answer is missing. Otherwise reuse the first answer. Never show an empty answer.
 
-Validation enforces the reference pack and the needs_view rule for the microSD slot (underside).
+Validation: Pi reference pack is OPTIONAL knowledge boost — only applied when is_pi_board true. Generic path has no allowed-parts list.
 
 ## Run and env
 

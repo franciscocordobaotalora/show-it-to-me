@@ -47,6 +47,8 @@ REFERENCES = [
     },
 ]
 
+KNOWN_PI_PARTS = {r["part"] for r in REFERENCES}
+
 def get_reference_text():
     lines = []
     for r in REFERENCES:

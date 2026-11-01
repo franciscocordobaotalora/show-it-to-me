@@ -290,11 +290,14 @@ function drawRegions(regions, frame){
   clearOverlay();
   const w=canvas.width, h=canvas.height;
   if(!w||!h) return;
-  const observed=[];
-  regions.forEach(r=>{ if(r.source!=='sam3') return; if(r.status==='observed') observed.push(r); });
+  const toDraw=[];
+  regions.forEach(r=>{
+    if(r.status==='observed' && r.source==='sam3') toDraw.push(r);
+    else if(r.status==='fallback_box') toDraw.push(r);
+  });
   const lineWidthOuter=Math.max(3, w*0.003);
   const lineWidthHalo=Math.max(1, w*0.0015);
-  observed.forEach(r=>{
+  toDraw.forEach(r=>{
     const poly=r.polygon;
     if(!Array.isArray(poly)||poly.length<3) return;
     ctx.beginPath();
@@ -304,14 +307,21 @@ function drawRegions(regions, frame){
       if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
     });
     ctx.closePath();
-    ctx.fillStyle='rgba(255,98,0,0.35)';
-    ctx.fill();
+    const isFallback = r.status==='fallback_box';
+    if(!isFallback){
+      ctx.fillStyle='rgba(255,98,0,0.35)';
+      ctx.fill();
+    }
+    // dashed outline for fallback, solid for observed
+    ctx.save();
+    if(isFallback) ctx.setLineDash([10,8]);
     ctx.lineWidth=lineWidthHalo+lineWidthOuter;
     ctx.strokeStyle='rgba(255,255,255,0.6)';
     ctx.stroke();
     ctx.lineWidth=lineWidthOuter;
     ctx.strokeStyle='#ff6200';
     ctx.stroke();
+    ctx.restore();
     let cx=0,cy=0;
     poly.forEach(p=>{ cx+=p[0]; cy+=p[1]; });
     cx=cx/poly.length*w;

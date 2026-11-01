@@ -55,18 +55,22 @@ def _extract_content(resp):
 
 def pass1(image_data_url, question, reference_text):
     system_prompt = (
-        'Return strict JSON with keys view, needs_view, targets, answer. '
-        'Each target has id, part, sam_prompt, box_1000. '
-        'Boxes are x1,y1,x2,y2 in 0..1000 of the image shown. '
-        'Allowed parts: fan_connector, usb_c_power_port, micro_hdmi_port, microsd_slot, active_cooler_fan, board. '
-        'For micro-HDMI, emit TWO targets: id micro_hdmi_port_0 left, id micro_hdmi_port_1 right, part micro_hdmi_port. '
-        'view is top|underside|unknown. '
-        'answer is 2 sentences max, labels only, no ids, no coordinates. '
-        'Example: {"view":"top","needs_view":null,"answer":"The fan header is at the top edge. The USB-C port is at the bottom left.","targets":[{"id":"1","part":"fan_connector","sam_prompt":"fan header","box_1000":[100,200,300,400]}]}'
+        'You are a helpful visual guide. Answer the user question about WHATEVER is in the photo. '
+        'Return strict JSON with keys is_pi_board, view, needs_view, targets, answer. '
+        'is_pi_board is boolean true if the photo shows a Raspberry Pi 5 board, else false. '
+        'view is top|underside|unknown — for Pi board use top/underside/unknown, otherwise unknown is fine. '
+        'needs_view is null|flip_board|closer — ONLY set for Pi board when microSD slot is needed but view is top; otherwise null. '
+        'Each target has id, label (2 to 4 words, human readable), sam_prompt (a short noun phrase SAM can find, e.g. "white connector", "power port"), box_1000 (x1,y1,x2,y2 in 0..1000 of the image shown). '
+        'No allowed-parts list — describe whatever the question is about. '
+        'If is_pi_board is true you MAY use precise Pi 5 part names from the OPTIONAL reference for label and sam_prompt and keep overlay labels precise; otherwise use generic description. '
+        'For micro-HDMI on Pi, emit TWO targets: id micro_hdmi_port_0 left, id micro_hdmi_port_1 right, label "micro-HDMI port". '
+        'answer is 2 to 3 plain sentences that explain what the thing is and what it does, in the same language as the question (reply in the language of the question). Never include ids or coordinates in the answer. '
+        'Example generic: {"is_pi_board":false,"view":"unknown","needs_view":null,"answer":"This is a ceramic mug for drinking hot beverages. It keeps the liquid warm and has a handle for easy holding.","targets":[{"id":"1","label":"ceramic mug","sam_prompt":"mug","box_1000":[100,200,300,400]}]} '
+        'Example Pi: {"is_pi_board":true,"view":"top","needs_view":null,"answer":"The fan header is at the top edge of the Pi 5. It provides power for the active cooler fan.","targets":[{"id":"1","label":"FAN header","sam_prompt":"fan header","box_1000":[100,200,300,400]}]}'
     )
     user_content = [
         {'type':'image_url','image_url':{'url': image_data_url}},
-        {'type':'text','text': f'Reference:\n{reference_text}\nQuestion: {question}'}
+        {'type':'text','text': f'OPTIONAL Pi 5 reference (only use if is_pi_board true, otherwise ignore and answer generically):\n{reference_text}\nQuestion: {question}'}
     ]
     messages = [
         {'role':'system','content': system_prompt},

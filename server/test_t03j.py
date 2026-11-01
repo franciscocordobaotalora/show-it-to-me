@@ -40,15 +40,16 @@ class TestT03J(unittest.TestCase):
 
     def test_quality_gate_large_bbox(self):
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
-        # board with large bbox >60%
+        # large bbox >85% should trigger generic quality gate fallback_box
         glimmer = FakeGlimmer({'view':'top','needs_view':None,'targets':[{'id':'1','part':'board','sam_prompt':'board','box_1000':[100,100,200,200]}]})
         class SamLarge:
             def segment(self, img, target):
-                return {'polygon': [[0,0],[1,0],[1,1]], 'bbox': [0.0,0.0,0.9,0.9], 'score':0.9, 'selection':'box_prompt'}
+                return {'polygon': [[0,0],[1,0],[1,1]], 'bbox': [0.0,0.0,0.95,0.95], 'score':0.9, 'selection':'box_prompt'}
         status, body = analyze(data, glimmer, SamLarge())
         self.assertEqual(status,200)
-        # quality gate should reject large bbox for board with box_prompt
-        self.assertEqual(body['regions'][0]['status'],'not_found')
+        # quality gate should reject large bbox -> fallback to Glimmer box dashed outline
+        self.assertEqual(body['regions'][0]['status'],'fallback_box')
+        self.assertEqual(body['regions'][0]['source'],'glimmer_box')
 
     def test_quality_gate_small_polygon(self):
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
@@ -58,7 +59,7 @@ class TestT03J(unittest.TestCase):
                 return {'polygon': [[0.1,0.1],[0.2,0.1]], 'bbox': [0.1,0.1,0.2,0.2], 'score':0.9, 'selection':'overlap'}
         status, body = analyze(data, glimmer, SamSmallPoly())
         self.assertEqual(status,200)
-        self.assertEqual(body['regions'][0]['status'],'not_found')
+        self.assertEqual(body['regions'][0]['status'],'fallback_box')
 
     def test_quality_gate_box_prompt_iou(self):
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
@@ -69,7 +70,7 @@ class TestT03J(unittest.TestCase):
                 return {'polygon': [[0.1,0.1],[0.2,0.1],[0.2,0.2]], 'bbox': [0.7,0.7,0.8,0.8], 'score':0.9, 'selection':'box_prompt'}
         status, body = analyze(data, glimmer, SamBadIoU())
         self.assertEqual(status,200)
-        self.assertEqual(body['regions'][0]['status'],'not_found')
+        self.assertEqual(body['regions'][0]['status'],'fallback_box')
 
     def test_answer_from_pass1(self):
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}

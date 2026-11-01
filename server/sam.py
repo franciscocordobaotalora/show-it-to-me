@@ -45,8 +45,11 @@ class SamSession:
                     _processor.reset_all_prompts(self.state)
                     box_1000 = target.get('box_1000')
                     part = target.get('part')
-                    if not box_1000 or not part:
-                        sam_prompt = target.get('sam_prompt','')
+                    label = target.get('label')
+                    sam_prompt_val = target.get('sam_prompt','')
+                    # generic open vocabulary: if no box, simple text prompt path
+                    if not box_1000:
+                        sam_prompt = sam_prompt_val or label or part or ''
                         _processor.set_text_prompt(sam_prompt, self.state)
                         masks = self.state.get('masks')
                         scores = self.state.get('scores')
@@ -64,13 +67,20 @@ class SamSession:
                         bbox = [0.0,0.0,0.0,0.0] if xs.size==0 else [float(xs.min())/self.w, float(ys.min())/self.h, float(xs.max())/self.w, float(ys.max())/self.h]
                         return {'polygon':polygon,'bbox':bbox,'score':best_score,'selection':'box_prompt'}
 
+                    # Determine prompts: Pi-specific if part is known Pi part, else generic uses sam_prompt
                     try:
-                        from reference import get_part_sam_prompts, get_part_visual
-                        prompts = get_part_sam_prompts(part)
-                        description = get_part_visual(part) or part
+                        from reference import get_part_sam_prompts, get_part_visual, KNOWN_PI_PARTS
+                        if part and part in KNOWN_PI_PARTS:
+                            prompts = get_part_sam_prompts(part)
+                            description = get_part_visual(part) or part
+                        else:
+                            # generic open vocabulary: single prompt from sam_prompt or label
+                            prompts = [sam_prompt_val or label or part or '']
+                            description = sam_prompt_val or label or part or ''
+                            prompts = [p for p in prompts if p]
                     except Exception:
-                        prompts = []
-                        description = part
+                        prompts = [sam_prompt_val or label or part or '']
+                        description = sam_prompt_val or label or part or ''
 
                     gx1 = box_1000[0]/1000.0*self.w
                     gy1 = box_1000[1]/1000.0*self.h
