@@ -77,6 +77,10 @@ Request is `POST /api/analyze` with frameId, requestId, question, and image as d
 
 Segmentation backend: `SAM_BACKEND=local` (default) runs SAM 3 on a GPU through `server/sam.py`; `SAM_BACKEND=meta` calls Meta's hosted `sam-3.1` through `server/sam_meta.py`, with no torch and no GPU. The hosted answer is a text format with a box and a compressed mask per match; it is decoded with Meta's official `meta_sam_parser` (copied into `server/vendor/` with its SAM License). Text prompts find large objects but miss small parts (USB-C port, brake caliper), so the server also sends Muse's box as a box prompt and picks the candidate that overlaps Muse's box. Measured on 2026-11-01 through the real pipeline (Muse Spark 1.3 plus hosted SAM 3.1): 5.8 to 9.2 s per photo request on five photos, against 9 to 28 s with the local SAM 3 and Baseten. Tests: `server/test_sam_meta.py` (real masks encoded with the official codec, Meta call mocked).
 
+## Live warm-up and greeting
+
+Tapping Live shows a "Getting ready" ring on the camera while the first scan runs. When it finishes, the ring turns into a green "Ready" check, a two-tone chime plays and the app says "Hi, what do you want to know?" (the greeting audio is fetched during the scan, so it starts at once). The mic ignores the chime and greeting. Open the page once with `?name=Francisco` and the greeting uses the name from then on (stored in the browser only).
+
 ## Logging
 
 `server/eventlog.py` writes JSON lines to the file named by `SIT_EVENT_LOG`.

@@ -69,6 +69,15 @@
         <div class="skeleton-wave"></div>
         <span>Camera starting…</span>
       </div>
+      <!-- Live warm-up: shown from tapping Live until the first scan is done, then turns into a short ready message -->
+      <div id="readyOverlay" class="ready-overlay is-loading" hidden aria-live="polite">
+        <div class="ready-ring" aria-hidden="true">
+          <svg viewBox="0 0 64 64"><circle class="rr-track" cx="32" cy="32" r="26"/><circle class="rr-arc" cx="32" cy="32" r="26"/><path class="rr-check" d="M20 33.5l8.5 8.5L45 23"/></svg>
+        </div>
+        <p class="ready-title" id="readyTitle">Getting ready</p>
+        <p class="ready-sub" id="readySub">Looking around so I can answer fast</p>
+        <div class="ready-steps" aria-hidden="true"><i></i><i></i><i></i></div>
+      </div>
       <div id="loading" class="loading" hidden>
         <div class="spinner" aria-hidden="true"></div>
         <p class="loading-text">Looking at the photo…</p>

@@ -162,6 +162,7 @@ function setAppState(next, detail){
   // also drive legacy liveStateEl
   if(liveStateEl) liveStateEl.textContent = stateLabel(next);
   if(statusEl){ statusEl.textContent = stateStatusText(next, detail); statusEl.setAttribute('aria-live','polite'); }
+  if(['hearing','thinking','speaking','answer'].includes(next)) { try{ hideReadyOverlay(); }catch(e){} }
   // update body class for CSS per state
   try{ document.body.setAttribute('data-state', next); }catch(e){}
   // Sync single pill #statusA + dot + animated indicator (bars while hearing/speaking, dots while thinking)
@@ -356,7 +357,44 @@ function updateReadyDot(){
   const fresh = scanLatestId && (Date.now()-scanLatestTs) < 60000;
   scanReadyDot.hidden = !fresh;
 }
-let liveReadyAnnounced=false, liveReadyTimer=null;
+let liveReadyAnnounced=false, liveReadyTimer=null, liveGreetingPromise=null, readyOverlayTimer=null;
+function liveUserName(){
+  // open the page once with ?name=Francisco and the greeting uses it from then on
+  try{
+    const q=new URLSearchParams(location.search).get('name');
+    if(q){ const n=q.trim().slice(0,30); try{ localStorage.setItem('sit_name', n); }catch(e){} return n; }
+    return (localStorage.getItem('sit_name')||'').trim().slice(0,30);
+  }catch(e){ return ''; }
+}
+function liveGreetingText(){ const n=liveUserName(); return n ? 'Hi '+n+', what do you want to know?' : 'Hi, what do you want to know?'; }
+function prefetchLiveGreeting(){
+  // fetched while the scan runs, so the greeting is ready the moment the system is
+  const text=liveGreetingText();
+  liveGreetingPromise = fetch('/api/speak',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})})
+    .then(r=>r.ok? r.arrayBuffer():null).catch(()=>null);
+  return text;
+}
+function readyOverlayEl(){ return document.getElementById('readyOverlay'); }
+function showReadyOverlay(){
+  const el=readyOverlayEl(); if(!el) return;
+  if(readyOverlayTimer){ clearTimeout(readyOverlayTimer); readyOverlayTimer=null; }
+  el.classList.remove('is-ready','is-done'); el.classList.add('is-loading'); el.hidden=false;
+  const t=document.getElementById('readyTitle'), sub=document.getElementById('readySub');
+  if(t) t.textContent='Getting ready'; if(sub) sub.textContent='Looking around so I can answer fast';
+}
+function hideReadyOverlay(){
+  const el=readyOverlayEl(); if(!el) return;
+  if(readyOverlayTimer){ clearTimeout(readyOverlayTimer); readyOverlayTimer=null; }
+  el.classList.add('is-done');
+  setTimeout(()=>{ if(el.classList.contains('is-done')) el.hidden=true; }, 480);
+}
+function markReadyOverlay(greeting){
+  const el=readyOverlayEl(); if(!el || el.hidden) return;
+  el.classList.remove('is-loading'); el.classList.add('is-ready');
+  const t=document.getElementById('readyTitle'), sub=document.getElementById('readySub');
+  if(t) t.textContent='Ready'; if(sub) sub.textContent=greeting||'Ask me anything';
+  readyOverlayTimer=setTimeout(hideReadyOverlay, 3800);
+}
 function playReadyChime(){
   // two rising tones through the live output so the phone user hears "ready" without looking
   try{
@@ -374,17 +412,36 @@ function playReadyChime(){
     });
   }catch(e){}
 }
-function announceLiveReady(reason){
+async function announceLiveReady(reason){
   if(!liveEnabled || liveReadyAnnounced) return;
   liveReadyAnnounced=true;
   if(liveReadyTimer){ clearTimeout(liveReadyTimer); liveReadyTimer=null; }
-  // keep the mic from hearing the chime as speech
-  const wasPaused=livePausedForPlayback;
-  livePausedForPlayback=true;
-  playReadyChime();
-  setTimeout(()=>{ if(!wasPaused && appState==='listening') livePausedForPlayback=false; }, 500);
+  const greeting=liveGreetingText();
+  markReadyOverlay(greeting);
   setStatus('Ready, ask me');
   sendClientEvent('live_ready', reason||'scan_ok');
+  // keep the mic from hearing the chime and the greeting as speech
+  livePausedForPlayback=true;
+  playReadyChime();
+  let pcm=null;
+  try{ pcm = liveGreetingPromise ? await liveGreetingPromise : null; }catch(e){ pcm=null; }
+  if(!liveEnabled) return;
+  if(pcm && pcm.byteLength>0 && liveCtx && liveMaster){
+    liveNextTime = liveCtx.currentTime + 0.42;   // after the chime
+    livePlayPCM(pcm);
+    sendClientEvent('live_greeting','played');
+  } else {
+    sendClientEvent('live_greeting','unavailable');
+  }
+  const t1=Date.now();
+  const wait=setInterval(()=>{
+    if(!liveEnabled){ clearInterval(wait); return; }
+    const quiet = liveSources.size===0 && (Date.now()-t1)>600;
+    if(quiet || (Date.now()-t1)>9000){
+      clearInterval(wait);
+      setTimeout(()=>{ if(liveEnabled && (appState==='listening')) livePausedForPlayback=false; }, 400);
+    }
+  },150);
 }
 async function doScan(){
   if(scanInFlight) return;
@@ -1503,7 +1560,7 @@ async function startLive(){
   setLiveState('Listening');
   liveReadyAnnounced=false; if(liveReadyTimer) clearTimeout(liveReadyTimer);
   liveReadyTimer=setTimeout(()=>announceLiveReady('timeout'), 30000);
-  setStatus('Getting ready...');
+  setStatus('Getting ready...'); showReadyOverlay(); prefetchLiveGreeting();
   liveBlocks=[]; liveSpeaking=false; liveVADState={ speechMs:0, silenceMs:0, totalMs:0 };
   // init pre-roll buffer (400ms = 4x100ms blocks, 6400 samples)
   try {
@@ -1573,7 +1630,7 @@ async function startLive(){
   startScanLoop();
 }
 function stopLive(){
-  liveEnabled=false; stopScanLoop(); if(liveReadyTimer){ clearTimeout(liveReadyTimer); liveReadyTimer=null; }
+  liveEnabled=false; stopScanLoop(); if(liveReadyTimer){ clearTimeout(liveReadyTimer); liveReadyTimer=null; } hideReadyOverlay();
   if(liveToggle) liveToggle.classList.remove('active');
   if(liveBar) liveBar.hidden=true;
   if(stopBtn) stopBtn.hidden=true;
