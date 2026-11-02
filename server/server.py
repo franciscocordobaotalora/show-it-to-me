@@ -178,7 +178,8 @@ from collections import OrderedDict as _OrderedDict
 SCAN_TTL = 60
 SCAN_MAX = 8
 SCAN_RATE_LIMIT = 20  # per minute
-SCAN_SAM_WORKERS = 3  # objects segmented at once; each fans out up to 4 Meta calls, so keep this low
+NO_DRAW_MESSAGE = "I couldn't mark that on your photo. Move a little closer and ask again."
+SCAN_SAM_WORKERS = 2  # objects segmented at once; each fans out up to 4 Meta calls, so keep this low
 SCAN_MIN_INTERVAL = 3  # seconds frontend, server also uses rate limit
 _scan_cache = _OrderedDict()
 _scan_cache_lock = threading.Lock()
@@ -264,6 +265,19 @@ class GlimmerError(Exception):
         self.code = code
         super().__init__(code)
 
+_fg_count = 0
+_fg_lock = threading.Lock()
+def _foreground_busy():
+    return _fg_count > 0
+class _foreground:
+    """Marks a real question as running, so the background pre-scan does not compete for SAM calls."""
+    def __enter__(self):
+        global _fg_count
+        with _fg_lock: _fg_count += 1
+    def __exit__(self, *a):
+        global _fg_count
+        with _fg_lock: _fg_count -= 1
+
 def handle_scan_request(data, glimmer_mod, sam_mod):
     scanId = data.get('scanId')
     image = data.get('image')
@@ -345,7 +359,9 @@ def handle_scan_request(data, glimmer_mod, sam_mod):
         poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
         return {'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0}
     def _segment_one(o):
-        target = {'id': o['label'], 'label': o['label'], 'part': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000']}
+        if _foreground_busy():
+            return _box_fallback(o)  # a real question is running: leave Meta's SAM quota to it
+        target = {'id': o['label'], 'label': o['label'], 'part': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'light': True}
         try:
             result = sam_mod.segment(pil_for_sam, target)
             cand = None
@@ -654,20 +670,19 @@ def analyze(data, glimmer_mod, sam_mod):
                         eventlog.log_event('sam_candidates', requestId=requestId, frameId=frameId, level='error', part=t.get('part'), error=str(e), traceback=tb)
                         break
                     else:
+                        # SAM failed for this target (rate limit, timeout): still draw Muse's own box as the outline
                         sam_status = 'sam_error'
                         sam_detail = f'{type(e).__name__}: {e}'[:200]
-                        regions = []
                         eventlog.log_event('sam_candidates', requestId=requestId, frameId=frameId, level='error', part=t.get('part'), error=str(e), traceback=tb)
-                        break
+                        result = None
                 except Exception as e:
                     import traceback, sys
                     traceback.print_exc(file=sys.stderr)
                     tb=traceback.format_exc()[:2000]
                     sam_status = 'sam_error'
                     sam_detail = f'{type(e).__name__}: {e}'[:200]
-                    regions = []
                     eventlog.log_event('sam_candidates', requestId=requestId, frameId=frameId, level='error', part=t.get('part'), error=str(e), traceback=tb)
-                    break
+                    result = None
                 part = t.get('part')
                 label = t.get('label') or (get_part_label(part) if part else 'item')
                 # log grounding selection/scores and agreement per T12
@@ -848,6 +863,12 @@ def analyze(data, glimmer_mod, sam_mod):
             explanation = 'Found ' + ', '.join(labels) + '.'
         else:
             explanation = 'Here is the highlighted area as requested.'
+    # Rule (Francisco, 2026-11-02): if nothing is drawn, nothing is answered. A flip-the-board hint is guidance, not an answer.
+    drawable = any(r.get('status') in ('observed','fallback_box') and r.get('polygon') for r in regions)
+    no_region = (not drawable) and (not needs_view)
+    if no_region:
+        eventlog.log_event('no_region', requestId=requestId, frameId=frameId, level='warn', targets=len(targets), sam_status=sam_status)
+        explanation = NO_DRAW_MESSAGE
     timings['total_ms'] = int((time.time() - t_decode_start)*1000)
     timings['pass2_ms'] = 0
     steps = [
@@ -859,6 +880,8 @@ def analyze(data, glimmer_mod, sam_mod):
     provenance = {'glimmer_model':'muse-glimmer-hackathon','sam_model':sam_status,'timings_ms':timings,'steps':steps, 'path':'full'}
     if sam_detail:
         provenance['sam_detail'] = sam_detail
+    if no_region:
+        provenance['no_region'] = True
     resp = {
         'frameId': frameId,
         'requestId': requestId,
@@ -1102,7 +1125,8 @@ class Handler(BaseHTTPRequestHandler):
                     except:
                         pass
                 eventlog.log_event('http_request_body', level='info', requestId=requestId, frameId=frameId, image_size=img_size, image_sha_prefix=sha_prefix)
-                status_code, resp = analyze(data, glimmer, sam)
+                with _foreground():
+                    status_code, resp = analyze(data, glimmer, sam)
                 self._json(status_code, resp)
                 status = status_code
             except Exception:

@@ -95,17 +95,36 @@ class TestAnalyze(unittest.TestCase):
         glimmer = FakeGlimmer({'view':'top','needs_view':None,'targets':[{'id':'1','part':'board','sam_prompt':'board'}]})
         status, body = analyze(data, glimmer, BoomSam())
         self.assertEqual(status,200)
-        self.assertEqual(body['regions'],[])
+        # no box from Muse and SAM down: nothing drawable, and the response says so
+        self.assertEqual([r['polygon'] for r in body['regions']],[None])
+        self.assertEqual(body['provenance']['sam_model'],'sam_error')
+
+    def test_sam_error_still_draws_muses_box(self):
+        # Meta SAM answered 429 on every call (2026-11-02): the question must still get an outline
+        class BoomSam:
+            def segment(self, img, target):
+                raise RuntimeError('sam_error: meta call failed: HTTP Error 429: Too Many Requests')
+        data = {'frameId':'f','requestId':'r','question':'where is the ram','image':make_data_url()}
+        glimmer = FakeGlimmer({'view':'top','needs_view':None,'targets':[{'id':'1','label':'RAM chip','sam_prompt':'chip','box_1000':[100,200,300,400]}]})
+        status, body = analyze(data, glimmer, BoomSam())
+        self.assertEqual(status,200)
+        self.assertEqual(len(body['regions']),1)
+        r = body['regions'][0]
+        self.assertEqual(r['status'],'fallback_box')
+        self.assertEqual(r['polygon'][0],[0.1,0.2])
         self.assertEqual(body['provenance']['sam_model'],'sam_error')
 
     def test_explanation_cleaner_preserves_digits(self):
         class GlimmerWithExplanation:
             def pass1(self, d,q,r):
-                return {'view':'top','needs_view':None,'targets':[]}
+                return {'view':'top','needs_view':None,'targets':[{'id':'1','label':'fan','sam_prompt':'fan','box_1000':[100,100,200,200]}]}
             def pass2(self, *args):
                 return 'The fan plugs into 4-pin socket ~[620, 250, 700, 340] Pi 5'
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
-        status, body = analyze(data, GlimmerWithExplanation(), FakeSam())
+        class PolySam:
+            def segment(self, img, target):
+                return {'polygon': [[0.1,0.1],[0.3,0.1],[0.3,0.3]], 'bbox': [0.1,0.1,0.3,0.3], 'score':0.9, 'selection':'box_prompt'}
+        status, body = analyze(data, GlimmerWithExplanation(), PolySam())
         self.assertEqual(status,200)
         # digits and spaces should remain
         self.assertIn('4-pin', body['explanation'])
@@ -232,3 +251,23 @@ class TestGlimmerPayload(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestNoDrawNoAnswer(unittest.TestCase):
+    def test_nothing_drawn_means_no_model_answer(self):
+        # Francisco, 2026-11-02: if it does not draw, it does not answer
+        data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
+        glimmer = FakeGlimmer({'view':'top','needs_view':None,'answer':'The RAM is next to the processor.','targets':[]})
+        status, body = analyze(data, glimmer, FakeSam())
+        self.assertEqual(status,200)
+        self.assertNotIn('RAM', body['explanation'])
+        self.assertIn("couldn't mark", body['explanation'])
+        self.assertTrue(body['provenance'].get('no_region'))
+
+    def test_flip_board_hint_is_not_blocked(self):
+        data = {'frameId':'f','requestId':'r','question':'where does the microSD card go','image':make_data_url()}
+        glimmer = FakeGlimmer({'is_pi_board':True,'view':'top','needs_view':'flip_board','answer':'Flip the board over to see the microSD slot.','targets':[]})
+        status, body = analyze(data, glimmer, FakeSam())
+        self.assertEqual(status,200)
+        self.assertEqual(body['needs_view'],'flip_board')
+        self.assertIn('Flip the board', body['explanation'])

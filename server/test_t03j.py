@@ -74,7 +74,7 @@ class TestT03J(unittest.TestCase):
 
     def test_answer_from_pass1(self):
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
-        glimmer = FakeGlimmer({'view':'top','needs_view':None,'answer':'Fan header found.','targets':[]})
+        glimmer = FakeGlimmer({'view':'top','needs_view':None,'answer':'Fan header found.','targets':[{'id':'1','label':'fan header','sam_prompt':'fan','box_1000':[100,100,200,200]}]})
         status, body = analyze(data, glimmer, FakeSam())
         self.assertEqual(status,200)
         self.assertEqual(body['explanation'],'Fan header found.')

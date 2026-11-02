@@ -34,6 +34,12 @@ MODEL = os.getenv('META_SAM_MODEL', 'sam-3.1')
 TIMEOUT_S = float(os.getenv('META_SAM_TIMEOUT', '25'))
 MAX_SIDE = 1280
 MAX_PROMPTS = 3
+# Meta answered HTTP 429 when a background pre-scan (up to 12 calls at once) overlapped a real question (2026-11-02):
+# every call of the question failed and nothing was drawn. Cap the calls in flight, and back off on 429.
+MAX_CONCURRENT = int(os.getenv('META_SAM_CONCURRENCY', '6'))
+_gate = threading.BoundedSemaphore(MAX_CONCURRENT)
+RETRY_STATUS = (429, 500, 502, 503, 504)
+BACKOFF_S = (0.6, 1.4, 2.5)
 
 _BOX_RE = re.compile(r'<\|box;x1=(-?[\d.]+);y1=(-?[\d.]+);x2=(-?[\d.]+);y2=(-?[\d.]+);w=(\d+);h=(\d+)\|>')
 _MASK_RE = re.compile(r'<\|mask;x=(\d+);y=(\d+);data=(\d+),(\d+),([~!])(.*?)\|>', re.S)
@@ -102,13 +108,15 @@ def _post(b64, text, timeout=None):
         {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,' + b64}]}]}
     data = json.dumps(body).encode()
     last = None
-    for attempt in range(2):
+    for attempt in range(len(BACKOFF_S) + 1):
         t0 = time.time()
+        wait_s = None
         try:
             req = urllib.request.Request(API_URL, data=data, headers={
                 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=timeout or TIMEOUT_S) as r:
-                o = json.load(r)
+            with _gate:
+                with urllib.request.urlopen(req, timeout=timeout or TIMEOUT_S) as r:
+                    o = json.load(r)
             out = o['output'][0]['content'][0].get('text') or ''
             _log('sam_meta_ok', backend='meta', ms=round((time.time() - t0) * 1000), chars=len(out),
                  images=(o.get('usage') or {}).get('images_processed'))
@@ -117,13 +125,20 @@ def _post(b64, text, timeout=None):
             last = e
             _log('sam_meta_fail', level='warn', backend='meta', status=e.code, attempt=attempt,
                  ms=round((time.time() - t0) * 1000))
-            if e.code not in (429, 500, 502, 503, 504):
+            if e.code not in RETRY_STATUS:
                 break
+            try:
+                wait_s = float(e.headers.get('Retry-After')) if e.headers.get('Retry-After') else None
+            except Exception:
+                wait_s = None
         except Exception as e:  # timeout, reset
             last = e
             _log('sam_meta_fail', level='warn', backend='meta', error=type(e).__name__, attempt=attempt,
                  ms=round((time.time() - t0) * 1000))
-        time.sleep(0.4)
+        if attempt < len(BACKOFF_S):
+            time.sleep(min(5.0, wait_s) if wait_s else BACKOFF_S[attempt])
+        else:
+            break
     raise RuntimeError('sam_error: meta call failed: %s' % (last,))
 
 
@@ -209,7 +224,7 @@ def _prompts_for(target):
     if not prompts:
         from sam import build_generic_prompts
         prompts = build_generic_prompts(sam_prompt or label or part or '', label)
-    return [p for p in prompts if p][:MAX_PROMPTS]
+    return [p for p in prompts if p][:(1 if target.get('light') else MAX_PROMPTS)]
 
 
 def segment(image_pil, target):

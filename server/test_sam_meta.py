@@ -1,5 +1,6 @@
 """Offline tests for the hosted SAM 3.1 backend (sam_meta). The Meta call is mocked; masks are real one-bit rasters
 encoded with the vendored official codec, so decode, placement and polygon logic are exercised for real."""
+import json
 import os
 import sys
 import unittest
@@ -137,3 +138,43 @@ class KeyTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RetryTests(unittest.TestCase):
+    def test_429_is_retried_with_backoff_then_succeeds(self):
+        import urllib.error, io
+        calls = []
+        class R:
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+            def read(s, *a): return b''
+        def fake_urlopen(req, timeout=None):
+            calls.append(1)
+            if len(calls) < 3:
+                raise urllib.error.HTTPError('u', 429, 'Too Many Requests', {}, io.BytesIO(b'{}'))
+            return io.BytesIO(json.dumps({'output': [{'content': [{'text': 'OK'}]}], 'usage': {}}).encode())
+        old = (sam_meta.urllib.request.urlopen, sam_meta.BACKOFF_S)
+        os.environ['META_API_KEY'] = 'k'
+        sam_meta.urllib.request.urlopen = fake_urlopen
+        sam_meta.BACKOFF_S = (0.01, 0.01, 0.01)
+        try:
+            self.assertEqual(sam_meta._post('b64', 'text'), 'OK')
+        finally:
+            sam_meta.urllib.request.urlopen, sam_meta.BACKOFF_S = old
+        self.assertEqual(len(calls), 3)
+
+    def test_400_is_not_retried(self):
+        import urllib.error, io
+        calls = []
+        def fake_urlopen(req, timeout=None):
+            calls.append(1)
+            raise urllib.error.HTTPError('u', 400, 'Bad Request', {}, io.BytesIO(b'{}'))
+        old = sam_meta.urllib.request.urlopen
+        os.environ['META_API_KEY'] = 'k'
+        sam_meta.urllib.request.urlopen = fake_urlopen
+        try:
+            with self.assertRaises(RuntimeError):
+                sam_meta._post('b64', 'text')
+        finally:
+            sam_meta.urllib.request.urlopen = old
+        self.assertEqual(len(calls), 1)

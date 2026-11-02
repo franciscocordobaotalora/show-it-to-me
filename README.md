@@ -78,6 +78,10 @@ Request is `POST /api/analyze` with frameId, requestId, question, and image as d
 
 Segmentation backend: `SAM_BACKEND=local` (default) runs SAM 3 on a GPU through `server/sam.py`; `SAM_BACKEND=meta` calls Meta's hosted `sam-3.1` through `server/sam_meta.py`, with no torch and no GPU. The hosted answer is a text format with a box and a compressed mask per match; it is decoded with Meta's official `meta_sam_parser` (copied into `server/vendor/` with its SAM License). Text prompts find large objects but miss small parts (USB-C port, brake caliper), so the server also sends Muse's box as a box prompt and picks the candidate that overlaps Muse's box. Measured on 2026-11-01 through the real pipeline (Muse Spark 1.3 plus hosted SAM 3.1): 5.8 to 9.2 s per photo request on five photos, against 9 to 28 s with the local SAM 3 and Baseten. Tests: `server/test_sam_meta.py` (real masks encoded with the official codec, Meta call mocked).
 
+## Always draw, or do not answer
+
+Every answer comes with a drawing. If SAM cannot cut the part out (rate limit, timeout), the app draws Muse's own box as an outline. If there is nothing to draw at all, the app does not give Muse's answer. It says "I couldn't mark that on your photo. Move a little closer and ask again." The one exception is the flip-the-board hint for the microSD slot. SAM calls are capped at 6 at once (`META_SAM_CONCURRENCY`), retried with back-off on HTTP 429, and the background pre-scan steps aside while a question is running.
+
 ## Live warm-up and greeting
 
 Tapping Live shows a "Getting ready" ring on the camera while the first scan runs. When it finishes, the ring turns into a green "Ready" check, a two-tone chime plays and the app says "Hi, what do you want to know?" (the greeting audio is fetched during the scan, so it starts at once). The mic ignores the chime and greeting. Open the page once with `?name=Francisco` and the greeting uses the name from then on (stored in the browser only).
