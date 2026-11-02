@@ -6,6 +6,10 @@ Show It To Me is a camera guide you talk to. Point your phone at a Meta Quest 3,
 
 Built for the Meta Global AI Developer Hackathon, Indie Developer Track, on Meta's models: Muse Spark, SAM 3.1 and Muse Voice Transcribe.
 
+**Watch the demo (1:41): https://youtu.be/xAUPXCmicME**
+
+[![Watch the Show It To Me demo on YouTube](https://img.youtube.com/vi/xAUPXCmicME/hqdefault.jpg)](https://youtu.be/xAUPXCmicME)
+
 <p>
 <img src="docs/images/quest3.jpg" width="23%" alt="A Meta Quest 3: the app outlines the center depth sensor and explains it">
 <img src="docs/images/raspberry-pi-5.jpg" width="23%" alt="A Raspberry Pi 5: the app outlines the processor">
