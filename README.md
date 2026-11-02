@@ -2,7 +2,7 @@
 
 Private development repo for the Meta Global AI Developer Hackathon, Indie track. The repo stays private until Francisco authorises publication. The test site is behind the our earlier voice app login.
 
-Written by Muse Spark Open (Baseten seat) and several other AI coding agents.
+Built with Muse Spark Open (open weight, Baseten seat) and several other AI coding agents.
 
 ## What it is
 
@@ -29,6 +29,7 @@ Every model in this project, what it did, and where it ran. Both Muse open-weigh
 | Muse Spark 1.3 (`muse-spark-1.3`) | Meta Model API, called with our key | Reads the photo and the question and writes the answer. In use since 2026-11-01, after the Baseten credit ran out |
 | SAM 3.1 (`sam-3.1`) | Meta Model API, called with our key | Cuts the part out of the photo for the live site since 2026-11-01 (`SAM_BACKEND=meta`), so serving needs no GPU. The local SAM 3 stays in the repo as the measuring bench and the fallback |
 | Speech engine (CPU) | Our own server | Speaks the answer aloud |
+| Other AI coding agents (several models) | Various | Reviewed the code and ran the tests |
 
 How we built it: we developed and measured everything locally on our own hardware (local Glimmer and SAM 3, our own benchmarks and numbers), then moved the live serving to hosted keys. The live site only needs API keys, no GPU. The prize rules ask for Meta open-weight models, so the open-weight ones (Glimmer, Spark Open, SAM 3) are the ones we developed, measured and coded with, and the README says plainly which hosted model answers today.
 
@@ -129,7 +130,7 @@ One design, "Conversation" (version 2). White cards, Meta blue, rounded corners,
 
 ## Verified live
 
-Verified live on 2026-11-01 by the build agent on the public site at 390x844 and 320x568. Fake camera showed the Pi 5 board, question typed, Ask clicked. Image 74 KB sent, answer and highlight returned in 11.4 s and 11.9 s. No console errors, no horizontal scroll. Checked with operator/check-live-ask.py. Not tested: a physical phone camera. Detail for checks: public site at 390x844 and 320x568, fake camera showing the Pi 5 board, question typed, Ask clicked, image 74 KB sent, answer and highlight in 11.4 s and 11.9 s, no console errors, no horizontal scroll (operator/check-live-ask.py). Not tested: a physical phone camera.
+Verified live on 2026-11-01 on the public site at 390x844 and 320x568. Fake camera showed the Pi 5 board, question typed, Ask clicked. Image 74 KB sent, answer and highlight returned in 11.4 s and 11.9 s. No console errors, no horizontal scroll. Checked with operator/check-live-ask.py. Not tested: a physical phone camera. Detail for checks: public site at 390x844 and 320x568, fake camera showing the Pi 5 board, question typed, Ask clicked, image 74 KB sent, answer and highlight in 11.4 s and 11.9 s, no console errors, no horizontal scroll (operator/check-live-ask.py). Not tested: a physical phone camera.
 
 ## Speed
 
@@ -196,7 +197,7 @@ Tap **Live** (Meta blue pill, mic icon, next to Back/Front) to enter voice mode.
 
 ### Latency log
 
-Events with timestamps: `speech_start`, `speech_end`, `transcript`, `analyze_sent`, `answer`, `spoken`. View with `grep live /data/.../events.jsonl` or browser console. Measured live on Atlas by the build agent 2026-11-01 (real Muse Spark Open + SAM3):
+Events with timestamps: `speech_start`, `speech_end`, `transcript`, `analyze_sent`, `answer`, `spoken`. View with `grep live /data/.../events.jsonl` or browser console. Measured live on Atlas 2026-11-01 (real Muse Spark Open + SAM3):
 
 | Stage | Measured |
 |-------|----------|
