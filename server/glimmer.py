@@ -1,9 +1,16 @@
-import os, json, urllib.request
+import os, json, time, threading, urllib.request
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 MUSE_API_BASE = os.getenv('MUSE_API_BASE','')
 MUSE_API_KEY = os.getenv('MUSE_API_KEY','')
 MODEL = os.getenv('MUSE_MODEL','muse-glimmer-hackathon')
 MIN_TOKENS = int(os.getenv('MUSE_MIN_TOKENS','0'))  # reasoning models need room for thinking before the JSON
+# Meta Model API takes the thinking level as `reasoning_effort` (minimal, low, medium, high). The "Reasoning strength: low"
+# system line is a Baseten convention and Meta ignores it. Measured 2026-11-02: minimal 3.5 to 4.1 s, low 6.6 to 7.1 s.
+REASONING_EFFORT = os.getenv('MUSE_REASONING_EFFORT','')
+# Hedged requests: if no answer after HEDGE_S seconds, send the identical request again and use whichever returns first.
+# One Muse call took 35 s on 2026-11-02 against 4 to 7 s normally; the second request escapes that tail.
+HEDGE_S = float(os.getenv('MUSE_HEDGE_S','0'))
 
 def _post_chat(messages, timeout=120, max_tokens=None):
     if not MUSE_API_BASE or not MUSE_API_KEY:
@@ -16,7 +23,9 @@ def _post_chat(messages, timeout=120, max_tokens=None):
         'model': MODEL,
         'messages': messages,
     }
-    if os.getenv('MUSE_REASONING_IN_SYSTEM'):
+    if REASONING_EFFORT:
+        payload['reasoning_effort'] = REASONING_EFFORT
+    elif os.getenv('MUSE_REASONING_IN_SYSTEM'):
         # Baseten takes the reasoning level from the system message; measured 6.1 s vs 11.1 s with the template kwarg.
         msgs = [dict(m) for m in messages]
         if msgs and msgs[0].get('role') == 'system' and isinstance(msgs[0].get('content'), str):
@@ -32,9 +41,49 @@ def _post_chat(messages, timeout=120, max_tokens=None):
     req = urllib.request.Request(url, data=data, method='POST')
     req.add_header('Content-Type','application/json')
     req.add_header('Authorization', f'Bearer {MUSE_API_KEY}')
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read()
-    return json.loads(body)
+    def once():
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+        return json.loads(body)
+    if HEDGE_S <= 0:
+        return once()
+    return _hedged(once, HEDGE_S)
+
+def _log(event, **fields):
+    try:
+        import eventlog
+        eventlog.log_event(event, **fields)
+    except Exception:
+        pass
+
+def _hedged(fn, hedge_s):
+    """Run fn(); if it has not finished after hedge_s seconds, run it a second time in parallel and return the first success.
+    If one attempt fails the other is awaited; if both fail the first error is raised. Losers are not waited for."""
+    ex = ThreadPoolExecutor(max_workers=2)
+    t0 = time.time()
+    try:
+        first = ex.submit(fn)
+        done, _ = wait([first], timeout=hedge_s)
+        if done:
+            return first.result()
+        second = ex.submit(fn)
+        pending = {first: 'first', second: 'second'}
+        errors = []
+        while pending:
+            done, _ = wait(list(pending), return_when=FIRST_COMPLETED)
+            for f in done:
+                which = pending.pop(f)
+                try:
+                    r = f.result()
+                except Exception as e:
+                    errors.append(e)
+                    continue
+                _log('hedge_fired', level='info', winner=which, ms=int((time.time()-t0)*1000), hedge_s=hedge_s)
+                return r
+        _log('hedge_fired', level='warn', winner='none', ms=int((time.time()-t0)*1000), hedge_s=hedge_s)
+        raise errors[0]
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
 class GlimmerError(Exception):
     def __init__(self, code):

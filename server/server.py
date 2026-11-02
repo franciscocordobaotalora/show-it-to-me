@@ -178,6 +178,7 @@ from collections import OrderedDict as _OrderedDict
 SCAN_TTL = 60
 SCAN_MAX = 8
 SCAN_RATE_LIMIT = 20  # per minute
+SCAN_SAM_WORKERS = 3  # objects segmented at once; each fans out up to 4 Meta calls, so keep this low
 SCAN_MIN_INTERVAL = 3  # seconds frontend, server also uses rate limit
 _scan_cache = _OrderedDict()
 _scan_cache_lock = threading.Lock()
@@ -336,48 +337,40 @@ def handle_scan_request(data, glimmer_mod, sam_mod):
     if len(objects_norm) < 3:
         # if model returned <3, keep what we have (allow 1-2 but ticket says 3-8)
         pass
-    # SAM batch masks
+    # SAM batch masks, one worker per object (each object already fans out its own prompts), order kept
     t_sam = time.time()
-    objects_out = []
-    for o in objects_norm:
+    def _box_fallback(o):
+        bx = o['box_1000']
+        bbox_fb = [bx[0]/1000.0, bx[1]/1000.0, bx[2]/1000.0, bx[3]/1000.0]
+        poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
+        return {'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0}
+    def _segment_one(o):
         target = {'id': o['label'], 'label': o['label'], 'part': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000']}
         try:
             result = sam_mod.segment(pil_for_sam, target)
-            # segment may return dict with polygon,bbox,score or list
             cand = None
             if isinstance(result, dict):
                 cand = result
-            elif isinstance(result, list) and len(result)>0:
+            elif isinstance(result, list) and len(result) > 0:
                 cand = result[0] if isinstance(result[0], dict) else None
-            else:
-                cand = None
             if cand and cand.get('polygon') and cand.get('bbox'):
-                poly = cand.get('polygon')
                 bbox = cand.get('bbox')
-                score = float(cand.get('score', 0.5))
-                # quality gate: skip huge masks >85%
-                if bbox:
-                    area = max(0.0,bbox[2]-bbox[0])*max(0.0,bbox[3]-bbox[1])
-                    if area > 0.85:
-                        # fallback to box polygon
-                        bx = o['box_1000']
-                        bbox_fb = [bx[0]/1000.0, bx[1]/1000.0, bx[2]/1000.0, bx[3]/1000.0]
-                        poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
-                        objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0})
-                        continue
-                objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly, 'bbox': bbox, 'score': score})
-            else:
-                # fallback to box polygon
-                bx = o['box_1000']
-                bbox_fb = [bx[0]/1000.0, bx[1]/1000.0, bx[2]/1000.0, bx[3]/1000.0]
-                poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
-                objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0})
+                # quality gate: a mask covering more than 85% of the frame becomes the box outline
+                if bbox and max(0.0, bbox[2]-bbox[0])*max(0.0, bbox[3]-bbox[1]) > 0.85:
+                    return _box_fallback(o)
+                return {'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': cand.get('polygon'), 'bbox': bbox, 'score': float(cand.get('score', 0.5))}
         except Exception:
-            # fallback box
-            bx = o['box_1000']
-            bbox_fb = [bx[0]/1000.0, bx[1]/1000.0, bx[2]/1000.0, bx[3]/1000.0]
-            poly_fb = [[bbox_fb[0],bbox_fb[1]],[bbox_fb[2],bbox_fb[1]],[bbox_fb[2],bbox_fb[3]],[bbox_fb[0],bbox_fb[3]]]
-            objects_out.append({'label': o['label'], 'sam_prompt': o['sam_prompt'], 'box_1000': o['box_1000'], 'polygon': poly_fb, 'bbox': bbox_fb, 'score': 0.0})
+            pass
+        return _box_fallback(o)
+    # prime the shared image encoding once, so the workers do not each encode the frame
+    try:
+        if hasattr(sam_mod, '_encode'):
+            sam_mod._encode(pil_for_sam)
+    except Exception:
+        pass
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=SCAN_SAM_WORKERS) as _ex:
+        objects_out = list(_ex.map(_segment_one, objects_norm))
     sam_ms = int((time.time()-t_sam)*1000)
     total_ms = int((time.time()-t0)*1000)
     resp = {'scanId': scanId, 'objects': objects_out, 'caption': caption}

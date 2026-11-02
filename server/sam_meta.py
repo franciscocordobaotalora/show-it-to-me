@@ -77,8 +77,14 @@ def build_box_prompt(box_px, size):
     """Box prompt text in the pixel space of the image that is sent."""
     w, h = size
     x1, y1, x2, y2 = [int(round(v)) for v in box_px]
-    x1, x2 = max(0, min(w - 1, x1)), max(1, min(w, x2))
-    y1, y2 = max(0, min(h - 1, y1)), max(1, min(h, y2))
+    # Meta rejects a box whose right or bottom edge sits on the frame edge ("lies outside the WxH frame", HTTP 400),
+    # so keep x2 and y2 one pixel inside. Muse often returns boxes that reach the edge.
+    x1, x2 = max(0, min(w - 2, x1)), max(1, min(w - 1, x2))
+    y1, y2 = max(0, min(h - 2, y1)), max(1, min(h - 1, y2))
+    if x2 <= x1:
+        x2 = x1 + 1
+    if y2 <= y1:
+        y2 = y1 + 1
     return _manual_box(x1, y1, x2, y2, w, h)
 
 

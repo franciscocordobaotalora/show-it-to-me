@@ -356,6 +356,36 @@ function updateReadyDot(){
   const fresh = scanLatestId && (Date.now()-scanLatestTs) < 60000;
   scanReadyDot.hidden = !fresh;
 }
+let liveReadyAnnounced=false, liveReadyTimer=null;
+function playReadyChime(){
+  // two rising tones through the live output so the phone user hears "ready" without looking
+  try{
+    if(!liveCtx) return;
+    const dest = liveMaster || liveCtx.destination;
+    const t0 = liveCtx.currentTime + 0.02;
+    [[880,0],[1320,0.14]].forEach(([hz,off])=>{
+      const o=liveCtx.createOscillator(), g=liveCtx.createGain();
+      o.type='sine'; o.frequency.value=hz;
+      g.gain.setValueAtTime(0.0001,t0+off);
+      g.gain.exponentialRampToValueAtTime(0.25,t0+off+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t0+off+0.2);
+      o.connect(g); g.connect(dest);
+      o.start(t0+off); o.stop(t0+off+0.22);
+    });
+  }catch(e){}
+}
+function announceLiveReady(reason){
+  if(!liveEnabled || liveReadyAnnounced) return;
+  liveReadyAnnounced=true;
+  if(liveReadyTimer){ clearTimeout(liveReadyTimer); liveReadyTimer=null; }
+  // keep the mic from hearing the chime as speech
+  const wasPaused=livePausedForPlayback;
+  livePausedForPlayback=true;
+  playReadyChime();
+  setTimeout(()=>{ if(!wasPaused && appState==='listening') livePausedForPlayback=false; }, 500);
+  setStatus('Ready, ask me');
+  sendClientEvent('live_ready', reason||'scan_ok');
+}
 async function doScan(){
   if(scanInFlight) return;
   if(document.hidden) return;
@@ -375,10 +405,12 @@ async function doScan(){
       scanLatestTs = Date.now();
       updateReadyDot();
       sendClientEvent('scan_ok', scanLatestId+' '+ (data.objects?.length||0));
+      announceLiveReady('scan_ok');
     } else {
       sendClientEvent('scan_fail', String(resp.status));
+      announceLiveReady('scan_fail');
     }
-  }catch(e){ sendClientEvent('scan_fail','network'); } finally{ scanInFlight=false; }
+  }catch(e){ sendClientEvent('scan_fail','network'); announceLiveReady('scan_fail'); } finally{ scanInFlight=false; }
 }
 function startScanLoop(){
   stopScanLoop();
@@ -1469,6 +1501,9 @@ async function startLive(){
   clearLiveBubbles();
   resetLiveLatency();
   setLiveState('Listening');
+  liveReadyAnnounced=false; if(liveReadyTimer) clearTimeout(liveReadyTimer);
+  liveReadyTimer=setTimeout(()=>announceLiveReady('timeout'), 30000);
+  setStatus('Getting ready...');
   liveBlocks=[]; liveSpeaking=false; liveVADState={ speechMs:0, silenceMs:0, totalMs:0 };
   // init pre-roll buffer (400ms = 4x100ms blocks, 6400 samples)
   try {
@@ -1538,7 +1573,7 @@ async function startLive(){
   startScanLoop();
 }
 function stopLive(){
-  liveEnabled=false; stopScanLoop();
+  liveEnabled=false; stopScanLoop(); if(liveReadyTimer){ clearTimeout(liveReadyTimer); liveReadyTimer=null; }
   if(liveToggle) liveToggle.classList.remove('active');
   if(liveBar) liveBar.hidden=true;
   if(stopBtn) stopBtn.hidden=true;

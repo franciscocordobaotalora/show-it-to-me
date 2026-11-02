@@ -69,7 +69,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(sam_meta.build_box_prompt((10.4, 20.6, 50, 80), (200, 100)),
                          '<0f>1<|box;x1=10;y1=21;x2=50;y2=80;w=200;h=100|>')
         self.assertEqual(sam_meta.build_box_prompt((-5, -5, 500, 500), (200, 100)),
-                         '<0f>1<|box;x1=0;y1=0;x2=200;y2=100;w=200;h=100|>')
+                         '<0f>1<|box;x1=0;y1=0;x2=199;y2=99;w=200;h=100|>')
 
 
 @unittest.skipUnless(HAVE_CV2, 'cv2 not installed here; the Atlas server and sysvenv run these')
