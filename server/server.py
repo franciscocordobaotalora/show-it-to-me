@@ -178,6 +178,8 @@ from collections import OrderedDict as _OrderedDict
 SCAN_TTL = 60
 SCAN_MAX = 8
 SCAN_RATE_LIMIT = 20  # per minute
+_DEICTIC = re.compile(r"\b(this|that|these|those|here|there)\b", re.I)
+SAVE_FRAMES = os.getenv('SIT_SAVE_FRAMES','') == '1'
 NO_DRAW_MESSAGE = "I couldn't mark that on your photo. Move a little closer and ask again."
 SCAN_SAM_WORKERS = 2  # objects segmented at once; each fans out up to 4 Meta calls, so keep this low
 SCAN_MIN_INTERVAL = 3  # seconds frontend, server also uses rate limit
@@ -408,7 +410,7 @@ def analyze(data, glimmer_mod, sam_mod):
     if not isinstance(question,str) or not (1 <= len(question) <= MAX_QUESTION):
         return 400, {'error':'invalid_question'}
     # T11 scan fast path: if scanId present and cached, try text-only call
-    if isinstance(scanId, str) and scanId:
+    if isinstance(scanId, str) and scanId and not _DEICTIC.search(question):
         _scan_cache_cleanup()
         cached = _scan_cache_get(scanId)
         if cached:
@@ -514,6 +516,18 @@ def analyze(data, glimmer_mod, sam_mod):
         data_url = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
     except Exception:
         return 400, {'error':'corrupt_image'}
+    if SAVE_FRAMES:
+        try:
+            fd = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs', 'frames')
+            os.makedirs(fd, exist_ok=True)
+            safe = re.sub(r'[^A-Za-z0-9_-]', '', requestId)[:40] or 'req'
+            with open(os.path.join(fd, safe + '.jpg'), 'wb') as _f:
+                _f.write(img_bytes)
+            old_frames = sorted((os.path.join(fd, n) for n in os.listdir(fd)), key=os.path.getmtime)
+            for _old in old_frames[:-40]:
+                os.remove(_old)
+        except Exception:
+            pass
     # reference text - OPTIONAL Pi 5 boost only if is_pi_board true
     from reference import get_reference_text, get_part_side, get_part_label, get_part_visual, get_part_sam_prompts, KNOWN_PI_PARTS
     ref_text = get_reference_text()
@@ -525,7 +539,7 @@ def analyze(data, glimmer_mod, sam_mod):
     try:
         p1 = glimmer_mod.pass1(data_url, question, ref_text)
         timings['pass1_ms'] = int((time.time()-t0)*1000)
-        eventlog.log_event('glimmer_pass1', requestId=requestId, frameId=frameId, ms=timings['pass1_ms'], finish_reason=p1.get('finish_reason'), tokens=p1.get('tokens'), needs_view=p1.get('needs_view'), is_pi_board=p1.get('is_pi_board'))
+        eventlog.log_event('glimmer_pass1', requestId=requestId, frameId=frameId, ms=timings['pass1_ms'], finish_reason=p1.get('finish_reason'), tokens=p1.get('tokens'), needs_view=p1.get('needs_view'), is_pi_board=p1.get('is_pi_board'), targets=[{'label':t.get('label'),'box':t.get('box_1000')} for t in (p1.get('targets') or [])[:3] if isinstance(t,dict)], question=question[:120])
     except GlimmerError as e:
         import traceback
         eventlog.log_event('glimmer_pass1', requestId=requestId, frameId=frameId, level='error', error=e.code, error_msg=str(e), traceback=traceback.format_exc()[:2000])

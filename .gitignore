@@ -16,3 +16,6 @@ coding-smoke/__pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime logs and saved debug frames (can hold user photos)
+logs/

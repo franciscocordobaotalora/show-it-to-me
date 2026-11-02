@@ -45,8 +45,9 @@ _BOX_RE = re.compile(r'<\|box;x1=(-?[\d.]+);y1=(-?[\d.]+);x2=(-?[\d.]+);y2=(-?[\
 _MASK_RE = re.compile(r'<\|mask;x=(\d+);y=(\d+);data=(\d+),(\d+),([~!])(.*?)\|>', re.S)
 
 _lock = threading.Lock()
-_cache = {'id': None, 'b64': None, 'size': None}
-_used = {}
+_cache = {'img': None, 'b64': None, 'size': None, 'used': []}
+# The cache holds the PIL image itself (not id(image)): after a photo is freed Python can give its id to the next photo, and the old
+# photo's pixels would then be sent to Meta with the new photo's box (found 2026-11-02, a flaky test and a possible wrong-picture mask).
 
 
 def _log(event, **fields):
@@ -66,7 +67,7 @@ def load():
 def _encode(image_pil):
     """JPEG base64 of the image at most 1280 px on the long side. Cached for the last image object."""
     with _lock:
-        if _cache['id'] == id(image_pil) and _cache['b64']:
+        if _cache['img'] is image_pil and _cache['b64']:
             return _cache['b64'], _cache['size']
     im = image_pil.convert('RGB')
     im.thumbnail((MAX_SIDE, MAX_SIDE))
@@ -74,8 +75,7 @@ def _encode(image_pil):
     im.save(buf, 'JPEG', quality=88)
     b64 = base64.b64encode(buf.getvalue()).decode()
     with _lock:
-        _cache.update(id=id(image_pil), b64=b64, size=im.size)
-        _used.clear()
+        _cache.update(img=image_pil, b64=b64, size=im.size, used=[])
     return b64, im.size
 
 
@@ -258,7 +258,7 @@ def segment(image_pil, target):
     box_cands = [o for kind, txt, objs in results if kind == 'box' for o in objs if o['mask'] is not None]
     # drop candidates already used by an earlier target of the same image (two micro-HDMI ports)
     with _lock:
-        used = list(_used.get(id(image_pil), []))
+        used = list(_cache['used']) if _cache['img'] is image_pil else []
     def fresh(o):
         return not any(_iou(o['box'], u) > 0.9 for u in used)
     text_cands = [(t, o) for t, o in text_cands if fresh(o)]
@@ -283,5 +283,6 @@ def segment(image_pil, target):
     res = _result(_full_mask(chosen, size), size, kind, 0.9, dbg)
     if res is not None:
         with _lock:
-            _used.setdefault(id(image_pil), []).append(chosen['box'])
+            if _cache['img'] is image_pil:
+                _cache['used'].append(chosen['box'])
     return res
