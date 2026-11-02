@@ -11,6 +11,9 @@ REASONING_EFFORT = os.getenv('MUSE_REASONING_EFFORT','')
 # Hedged requests: if no answer after HEDGE_S seconds, send the identical request again and use whichever returns first.
 # One Muse call took 35 s on 2026-11-02 against 4 to 7 s normally; the second request escapes that tail.
 HEDGE_S = float(os.getenv('MUSE_HEDGE_S','0'))
+# Sampling: unset means the API default. Set MUSE_TEMPERATURE=0 (and optionally MUSE_SEED) for repeatable answers and boxes.
+TEMPERATURE = os.getenv('MUSE_TEMPERATURE','')
+SEED = os.getenv('MUSE_SEED','')
 
 def _post_chat(messages, timeout=120, max_tokens=None):
     if not MUSE_API_BASE or not MUSE_API_KEY:
@@ -35,6 +38,10 @@ def _post_chat(messages, timeout=120, max_tokens=None):
         payload['messages'] = msgs
     else:
         payload['chat_template_kwargs'] = {'reasoning_strength':'low'}
+    if TEMPERATURE != '':
+        payload['temperature'] = float(TEMPERATURE)
+    if SEED != '':
+        payload['seed'] = int(SEED)
     if max_tokens is not None:
         payload['max_tokens'] = max(max_tokens, MIN_TOKENS)
     data = json.dumps(payload).encode()

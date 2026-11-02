@@ -37,6 +37,15 @@ REFERENCES = [
         "source_url": "https://www.raspberrypi.com/documentation/computers/raspberry-pi.html"
     },
     {
+        "part": "processor_soc",
+        "name": "Processor (BCM2712)",
+        "side": "top",
+        "description": "main chip, in the middle of the board under a metal lid; with a heatsink or the Active Cooler fitted it sits under that",
+        "visual": "the central chip under the silver metal lid, or under the heatsink when one is fitted",
+        "sam_prompts": ["heatsink", "chip"],
+        "source_url": "https://www.raspberrypi.com/documentation/computers/processors.html"
+    },
+    {
         "part": "microsd_slot",
         "name": "microSD slot",
         "side": "underside",

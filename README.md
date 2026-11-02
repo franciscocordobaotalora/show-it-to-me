@@ -62,6 +62,7 @@ Env variables:
 * `MUSE_MODEL` - model id to call
 * `MUSE_MIN_TOKENS` - room for reasoning. 3500 on Baseten so the model can think before returning JSON.
 * `MUSE_REASONING_EFFORT` - Meta's thinking level (`minimal`, `low`, `medium`, `high`). Live site uses `minimal`: measured 2.1 to 3.1 s per photo answer against 2.7 to 5.6 s on `low`, same answers (2026-11-02). Meta ignores the system-message line below.
+* `MUSE_TEMPERATURE` - sampling temperature (live site: `0`). Unset, the same photo and question gave boxes that overlapped only 0.38 to 0.59 between runs; at 0 they overlap 0.79 to 1.0 (6 runs, 2026-11-02). `MUSE_SEED` pins the seed as well.
 * `MUSE_HEDGE_S` - seconds to wait before sending a second identical Muse request and using whichever returns first (live site: 8). One call took 35 s against a usual 3 to 7 s.
 * `MUSE_REASONING_IN_SYSTEM` - when set, puts "Reasoning strength: low" in the system message. Measured 6.1 s vs 11.1 s per call compared to the template kwarg.
 * `SAM_BACKEND` - `meta` (hosted SAM 3.1, no GPU) or `local` (SAM 3 on a GPU, needs `SAM3_CHECKPOINT`)
