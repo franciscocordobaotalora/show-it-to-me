@@ -1,4 +1,4 @@
-// Credit: adapted from an earlier voice project (proven on iPhone Chrome 2026-10-29)
+// Microphone capture worklet (16 kHz, 100 ms int16 blocks), adapted from an earlier voice project of ours and tested on iPhone Chrome
 // Takes whatever rate the phone captures at (usually 48 kHz) and sends 100 ms
 // blocks of 16 kHz signed 16-bit mono audio to the page.
 class MicProcessor extends AudioWorkletProcessor {

@@ -255,7 +255,7 @@ if __name__ == '__main__':
 
 class TestNoDrawNoAnswer(unittest.TestCase):
     def test_nothing_drawn_means_no_model_answer(self):
-        # Francisco, 2026-11-02: if it does not draw, it does not answer
+        # if it does not draw, it does not answer
         data = {'frameId':'f','requestId':'r','question':'q','image':make_data_url()}
         glimmer = FakeGlimmer({'view':'top','needs_view':None,'answer':'The RAM is next to the processor.','targets':[]})
         status, body = analyze(data, glimmer, FakeSam())

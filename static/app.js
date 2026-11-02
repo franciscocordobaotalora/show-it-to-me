@@ -90,7 +90,7 @@ function initBRefs(){
   bMenuBtn=document.getElementById('bMenuBtn');
   bLevelMeter=document.querySelector('.b-level');
 }
-// Live audio state (an earlier voice project pattern)
+// Live audio state
 let liveEnabled = false;
 let liveSrcNode = null;
 let liveCtx = null, liveStream = null, liveMicNode = null, liveSink = null, liveMaster = null, liveOutputEl = null, liveOutDest = null, liveSources = new Set();
@@ -124,14 +124,14 @@ const SCAN_INTERVAL_MS = 3000;
 const SCAN_TICK_MS = 500;
 const SCAN_STABLE_MS = 600;
 
-// iOS API guards: check availability with fallbacks (an earlier voice project pattern)
+// iOS API guards: check availability with fallbacks
 function safeAt(arr, idx){ try{ if(Array.prototype.at) return arr.at(idx); }catch(e){} return arr[idx<0?arr.length+idx:idx]; }
 function safeStructuredClone(obj){ try{ if(typeof structuredClone==='function') return structuredClone(obj); }catch(e){} return JSON.parse(JSON.stringify(obj)); }
 
-// wakeLock for iPhone (keep screen awake during camera, like our earlier voice app call)
+// wakeLock for iPhone (keep screen awake during camera)
 async function requestWakeLock(){ try{ if('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch(e){} }
 function releaseWakeLock(){ try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} }
-// audioSession guard (iOS, like our earlier voice app)
+// audioSession guard (iOS)
 function audioSession(type){ try{ if(navigator.audioSession) navigator.audioSession.type = type; }catch(e){} }
 
 // demo hook via URL ?demo=1 (no checkbox on page)
@@ -275,7 +275,7 @@ async function unlockAudioForIOS(){
 async function connectLiveOutput(){
   if(!liveCtx) return;
   liveMaster = liveCtx.createGain();
-  // try hidden audio element with setSinkId like an earlier voice project
+  // try hidden audio element with setSinkId
   if(typeof HTMLMediaElement.prototype.setSinkId==='function' && navigator.mediaDevices.enumerateDevices){
     try{
       liveOutDest = liveCtx.createMediaStreamDestination();
@@ -359,7 +359,7 @@ function updateReadyDot(){
 }
 let liveReadyAnnounced=false, liveReadyTimer=null, liveGreetingPromise=null, readyOverlayTimer=null;
 function liveUserName(){
-  // open the page once with ?name=Francisco and the greeting uses it from then on
+  // open the page once with ?name=YourName and the greeting uses it from then on
   try{
     const q=new URLSearchParams(location.search).get('name');
     if(q){ const n=q.trim().slice(0,30); try{ localStorage.setItem('sit_name', n); }catch(e){} return n; }
@@ -835,7 +835,7 @@ async function startCamera(facing){
   }catch(e){
     const name = e && e.name ? e.name : '';
     let msg='';
-    // permission messages reuse an earlier voice project mic pattern: instruct to allow in browser settings
+    // permission messages: instruct to allow in browser settings
     if(name==='NotAllowedError' || name==='PermissionDeniedError') msg='I do not have permission to use the camera. Allow it for this site in the browser settings and try again, or choose a photo.';
     else if(name==='NotFoundError' || name==='DevicesNotFoundError') msg='No camera found, choose a photo instead';
     else if(name==='NotReadableError' || name==='AbortError') msg='Camera busy, close other apps or choose a photo';
@@ -880,7 +880,7 @@ function captureLiveFrame(){
     }
 
     if(usePreview){
-      // iOS gallery: handle EXIF orientation via createImageBitmap with imageOrientation from-image (our earlier voice app pattern), fallback to <img> decode
+      // iOS gallery: handle EXIF orientation via createImageBitmap with imageOrientation from-image , fallback to <img> decode
       (async()=>{
         try{
           if(typeof createImageBitmap==='function'){
@@ -1569,7 +1569,7 @@ async function startLive(){
   } catch(e){ livePreRollBuffer=null; }
   // start camera if not already
   if(!currentStream) { try{ await startCamera(currentFacing); }catch(e){} }
-  // audioSession like an earlier voice project
+  // audioSession
   audioSession('auto');
   try{
     liveStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true, channelCount:1}});
@@ -1792,7 +1792,7 @@ async function speakAnswerLive(answerText){
       const pcm=await resp.arrayBuffer();
       if(firstByteTime===null){ firstByteTime=performance.now(); const ms=Math.round(firstByteTime - (liveLatency.answer||firstByteTime)); sendClientEvent('spoken', String(ms)); }
       livePlayPCM(pcm);
-      // wait until this buffer finished? We schedule nextTime like our-earlier-voice-app; to keep order we don't wait strictly but allow overlap
+      // wait until this buffer finished? We schedule nextTime in order; to keep order we don't wait strictly but allow overlap
       // small delay to ensure ordering
     }catch(e){
       liveFallbackTTS(sent);
@@ -1874,20 +1874,20 @@ video.oncanplay=()=>{ syncOverlaySize(); updateAskEnabled(); };
 video.onplay=()=>{ updateAskEnabled(); };
 if(preview) preview.onload=()=>{ syncOverlaySize(); updateAskEnabled(); };
 // iOS guards: navigator.mediaDevices availability already checked in startCamera; handle missing APIs with fallbacks
-// ResizeObserver guard (our earlier voice app pattern: fallback to resize)
+// ResizeObserver guard (fallback to resize)
 try{ if(typeof ResizeObserver!=='undefined'){ const ro=new ResizeObserver(()=> syncOverlaySize()); const wrap=document.getElementById('cameraWrap'); if(wrap) ro.observe(wrap); }}catch(e){}
 // AbortSignal.timeout guard: wrap in try/catch and fallback to AbortController+setTimeout (already used)
 function timeoutSignal(ms){ try{ if(typeof AbortSignal!=='undefined' && typeof AbortSignal.timeout==='function') return AbortSignal.timeout(ms); }catch(e){} const c=new AbortController(); setTimeout(()=>c.abort(), ms); return c.signal; }
 window.onresize=()=>{ syncOverlaySize(); updateAskEnabled(); };
 // iOS orientation change
 window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{ syncOverlaySize(); updateAskEnabled(); }, 300); });
-// visibilitychange: stop tracks when hidden, restart when visible (our earlier voice app pattern)
+// visibilitychange: stop tracks when hidden, restart when visible
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='visible'){ if(!currentStream && !isFrozen){ startCamera(currentFacing); } try{ if(video && video.paused && currentStream) video.play(); }catch(e){} requestWakeLock(); if(liveEnabled && !scanTick) startScanLoop(); }
   else { try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} audioSession('auto'); if(scanTick) stopScanLoop(); }
 });
 window.addEventListener('pagehide', ()=>{ try{ if(currentStream) currentStream.getTracks().forEach(t=>t.stop()); }catch(e){} releaseWakeLock(); });
-// visualViewport keyboard handling: keep question input above keyboard (an earlier voice project ~617)
+// visualViewport keyboard handling: keep question input above keyboard
 if(window.visualViewport){
   const vv=visualViewport, container=document.querySelector('.container'), qCard=document.querySelector('.question-card');
   const sh=qCard||container;

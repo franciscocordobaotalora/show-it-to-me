@@ -7,7 +7,7 @@ TRANSCRIBE_MAX_BYTES = 2 * 1024 * 1024
 TRANSCRIBE_MAX_MS = 30 * 1000
 SPEAK_MAX_CHARS = 400
 META_ASR_URL = os.getenv('META_ASR_URL', 'https://api.meta.ai/v1/asr/transcribe')
-ENGINE_BASE_DEFAULT = 'http://ENGINE_HOST:8851'
+ENGINE_BASE_DEFAULT = ''   # set ENGINE_BASE (and ENGINE_TOKEN) to use your own text-to-speech engine; without them the page speaks with the browser voice
 
 def _wav_info(wav_bytes):
     """Parse WAV header for duration check. Returns dict or None."""
@@ -877,7 +877,7 @@ def analyze(data, glimmer_mod, sam_mod):
             explanation = 'Found ' + ', '.join(labels) + '.'
         else:
             explanation = 'Here is the highlighted area as requested.'
-    # Rule (Francisco, 2026-11-02): if nothing is drawn, nothing is answered. A flip-the-board hint is guidance, not an answer.
+    # Rule: if nothing is drawn, nothing is answered. A flip-the-board hint is guidance, not an answer.
     drawable = any(r.get('status') in ('observed','fallback_box') and r.get('polygon') for r in regions)
     no_region = (not drawable) and (not needs_view)
     if no_region:
@@ -948,7 +948,7 @@ class Handler(BaseHTTPRequestHandler):
                     except:
                         n = 100
                     n = max(1, min(n, 500))
-                    log_path = os.getenv('SIT_EVENT_LOG', '/data/project/logs/events.jsonl')
+                    log_path = os.getenv('SIT_EVENT_LOG', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs', 'events.jsonl'))
                     events = []
                     try:
                         with open(log_path, 'r', encoding='utf-8') as f:

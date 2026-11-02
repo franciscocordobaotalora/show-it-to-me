@@ -19,3 +19,8 @@ Thumbs.db
 
 # Runtime logs and saved debug frames (can hold user photos)
 logs/
+
+# Generated test output
+test-results/
+receipts/
+node_modules/

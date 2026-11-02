@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 
 _lock = threading.Lock()
-_DEFAULT_PATH = '/data/project/logs/events.jsonl'
+_DEFAULT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs', 'events.jsonl')
 _MAX_BYTES = 20 * 1024 * 1024
 _KEEP = 5
 
